@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import engine, init_db
 from app.core.redis import redis_client
+from app.modules.identity.router import auth_router, users_router
+from app.modules.fandom.router import fandom_router
 
 settings = get_settings()
 
@@ -21,7 +23,8 @@ sio = socketio.AsyncServer(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Check database & redis
+    # Startup: Initialize DB tables & connections
+    await init_db()
     yield
     # Shutdown: Clean up connections
     await engine.dispose()
@@ -45,6 +48,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount Routers
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(fandom_router)
+
 
 
 @app.get("/health", tags=["System"])
