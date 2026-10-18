@@ -8,6 +8,10 @@ class ApiClient {
 
   late final Dio dio;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  bool _isRefreshing = false;
+
+  /// Callback triggered when authentication completely fails (e.g. refresh token expired or revoked)
+  void Function()? onSessionExpired;
 
   ApiClient._internal() {
     dio = Dio(
@@ -32,11 +36,54 @@ class ApiClient {
           return handler.next(options);
         },
         onError: (DioException error, handler) async {
-          // If token expired, clear token
-          if (error.response?.statusCode == 401) {
-            await _storage.delete(key: 'access_token');
-            await _storage.delete(key: 'refresh_token');
+          final requestPath = error.requestOptions.path;
+
+          // If 401 occurs and not already attempting refresh/login
+          if (error.response?.statusCode == 401 &&
+              !requestPath.contains('/auth/login') &&
+              !requestPath.contains('/auth/refresh') &&
+              !requestPath.contains('/auth/register') &&
+              !_isRefreshing) {
+            _isRefreshing = true;
+
+            try {
+              final refreshToken = await _storage.read(key: 'refresh_token');
+              if (refreshToken != null && refreshToken.isNotEmpty) {
+                // Call refresh endpoint directly using a clean Dio instance
+                final refreshDio = Dio(BaseOptions(baseUrl: AppConstants.baseUrl));
+                final res = await refreshDio.post(
+                  '/api/v1/auth/refresh',
+                  data: {'refresh_token': refreshToken},
+                );
+
+                if (res.statusCode == 200) {
+                  final newAccessToken = res.data['access_token'];
+                  final newRefreshToken = res.data['refresh_token'];
+                  await saveTokens(
+                    accessToken: newAccessToken,
+                    refreshToken: newRefreshToken,
+                  );
+
+                  _isRefreshing = false;
+
+                  // Retry the original failed request with the fresh token
+                  final retryOptions = error.requestOptions;
+                  retryOptions.headers['Authorization'] = 'Bearer $newAccessToken';
+                  final retryResponse = await dio.fetch(retryOptions);
+                  return handler.resolve(retryResponse);
+                }
+              }
+            } catch (_) {
+              // Refresh failed
+            } finally {
+              _isRefreshing = false;
+            }
+
+            // Both token and refresh token are invalid
+            await clearTokens();
+            onSessionExpired?.call();
           }
+
           return handler.next(error);
         },
       ),
@@ -55,5 +102,9 @@ class ApiClient {
 
   Future<String?> getAccessToken() async {
     return await _storage.read(key: 'access_token');
+  }
+
+  Future<String?> getRefreshToken() async {
+    return await _storage.read(key: 'refresh_token');
   }
 }

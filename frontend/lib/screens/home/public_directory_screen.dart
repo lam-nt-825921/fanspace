@@ -5,6 +5,10 @@ import '../../models/fandom_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/fandom_provider.dart';
 import '../auth/login_screen.dart';
+import '../auth/widgets/theme_toggle_button.dart';
+import '../auth/widgets/active_sessions_dialog.dart';
+import '../auth/widgets/email_otp_dialog.dart';
+import '../auth/widgets/oauth_set_password_dialog.dart';
 import 'create_fandom_screen.dart';
 import 'fandom_detail_screen.dart';
 
@@ -82,6 +86,35 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
               onSelected: (value) {
                 if (value == 'logout') {
                   auth.logout();
+                } else if (value == 'sessions') {
+                  ActiveSessionsDialog.show(context);
+                } else if (value == 'verify_email') {
+                  if (auth.currentUser?.email != null) {
+                    EmailOtpDialog.show(context, email: auth.currentUser!.email);
+                  }
+                } else if (value == 'set_password') {
+                  if (auth.currentUser?.email != null) {
+                    OAuthSetPasswordDialog.show(context, email: auth.currentUser!.email);
+                  }
+                } else if (value == 'delete_account') {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Xác nhận xóa tài khoản?'),
+                      content: const Text('Tài khoản của bạn sẽ bị vô hiệu hóa và đăng xuất khỏi mọi thiết bị.'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            auth.deleteAccount();
+                          },
+                          child: const Text('Xóa tài khoản'),
+                        ),
+                      ],
+                    ),
+                  );
                 }
               },
               itemBuilder: (context) => [
@@ -92,6 +125,53 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
                     children: [
                       Text(auth.currentUser?.displayName ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
                       Text('@${auth.currentUser?.username}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                      if (auth.currentUser?.isEmailVerified == false) ...[
+                        const SizedBox(height: 4),
+                        const Text('⚠️ Chưa xác thực email', style: TextStyle(color: AppTheme.warning, fontSize: 11)),
+                      ],
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'sessions',
+                  child: Row(
+                    children: [
+                      Icon(Icons.devices_rounded, size: 18),
+                      SizedBox(width: 8),
+                      Text('Quản lý thiết bị / phiên'),
+                    ],
+                  ),
+                ),
+                if (auth.currentUser?.hasPassword == false)
+                  const PopupMenuItem(
+                    value: 'set_password',
+                    child: Row(
+                      children: [
+                        Icon(Icons.password_rounded, size: 18),
+                        SizedBox(width: 8),
+                        Text('Thiết lập mật khẩu cá nhân'),
+                      ],
+                    ),
+                  ),
+                if (auth.currentUser?.isEmailVerified == false)
+                  const PopupMenuItem(
+                    value: 'verify_email',
+                    child: Row(
+                      children: [
+                        Icon(Icons.mark_email_read_rounded, size: 18, color: AppTheme.primary),
+                        SizedBox(width: 8),
+                        Text('Xác thực Email ngay'),
+                      ],
+                    ),
+                  ),
+                const PopupMenuItem(
+                  value: 'delete_account',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
+                      SizedBox(width: 8),
+                      Text('Xóa tài khoản', style: TextStyle(color: AppTheme.error)),
                     ],
                   ),
                 ),
@@ -130,7 +210,11 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
               label: const Text('Đăng nhập', style: TextStyle(color: AppTheme.primary)),
             ),
           ],
-          const SizedBox(width: 8),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: ThemeToggleButton(),
+          ),
+          const SizedBox(width: 4),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(

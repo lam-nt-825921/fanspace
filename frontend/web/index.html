@@ -1,47 +1,78 @@
 <!DOCTYPE html>
-<html>
+<html lang="vi">
 <head>
   <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
+    Base href for Flutter Web routing
   -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="FanSpace - Mạng xã hội Fandom & Giao tiếp Thời gian thực">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Primary SEO Meta Tags -->
+  <title>FanSpace - Mạng Xã Hội Fandom & Giao Tiếp Thời Gian Thực</title>
+  <meta name="title" content="FanSpace - Mạng Xã Hội Fandom & Giao Tiếp Thời Gian Thực">
+  <meta name="description" content="Nền tảng mạng xã hội và giao tiếp thời gian thực chuyên biệt cho hệ sinh thái fandom. Đăng ký, đăng nhập an toàn, kết nối cộng đồng thần tượng, chat nhóm và voice room đỉnh cao.">
+  <meta name="keywords" content="FanSpace, Fandom, Mạng xã hội Fandom, Chat thời gian thực, Voice room, Thần tượng, Kpop, Vpop, Đăng ký FanSpace, Đăng nhập FanSpace">
+  <meta name="author" content="FanSpace Team">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://fanspace.vn/">
+
+  <!-- Google OAuth Client ID -->
   <meta name="google-signin-client_id" content="282351853301-svrittqkk76n3biil9l93l0a6fvj9nja.apps.googleusercontent.com">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://fanspace.vn/">
+  <meta property="og:title" content="FanSpace - Mạng Xã Hội Fandom & Giao Tiếp Thời Gian Thực">
+  <meta property="og:description" content="Không gian biệt lập cho cộng đồng người hâm mộ. Tự do quản lý, kết nối thần tượng và trải nghiệm giao tiếp thế hệ mới.">
+  <meta property="og:image" content="https://fanspace.vn/icons/Icon-512.png">
+  <meta property="og:site_name" content="FanSpace">
+  <meta property="og:locale" content="vi_VN">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://fanspace.vn/">
+  <meta name="twitter:title" content="FanSpace - Mạng Xã Hội Fandom & Giao Tiếp Thời Gian Thực">
+  <meta name="twitter:description" content="Nền tảng giao tiếp, chat nhóm và kết nối cộng đồng fandom đỉnh cao. Đăng nhập ngay!">
+  <meta name="twitter:image" content="https://fanspace.vn/icons/Icon-512.png">
+
+  <!-- Structured Data (JSON-LD) for Search Engines -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "FanSpace",
+    "url": "https://fanspace.vn",
+    "applicationCategory": "SocialNetworkingApplication",
+    "operatingSystem": "All",
+    "description": "Nền tảng mạng xã hội và giao tiếp thời gian thực cho các cộng đồng fandom.",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "VND"
+    },
+    "featureList": [
+      "Xác thực đa nền tảng bảo mật cao (Web, Mobile, Desktop)",
+      "Đăng nhập nhanh qua Google OAuth2",
+      "Xác thực mã OTP 6 số qua Email",
+      "Quản lý đa phiên thiết bị và bảo vệ tài khoản"
+    ]
+  }
+  </script>
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="FanSpace">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
-
-  <title>FanSpace - Mạng xã hội Fandom</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

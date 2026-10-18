@@ -1,18 +1,43 @@
+import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import '../core/api/api_client.dart';
+import '../core/client_detector/client_detector.dart';
 import '../models/user_model.dart';
+import '../models/session_model.dart';
 
 class AuthProvider extends ChangeNotifier {
   final ApiClient _apiClient = ApiClient();
   UserModel? _currentUser;
   bool _isLoading = false;
   String? _errorMessage;
+  String? _successMessage;
+
+  // Lockout countdown timer
+  int _lockoutSeconds = 0;
+  Timer? _lockoutTimer;
 
   UserModel? get currentUser => _currentUser;
   bool get isAuthenticated => _currentUser != null;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+  String? get successMessage => _successMessage;
+  int get lockoutSeconds => _lockoutSeconds;
+  bool get isLockedOut => _lockoutSeconds > 0;
+
+  AuthProvider() {
+    _apiClient.onSessionExpired = () {
+      _currentUser = null;
+      _errorMessage = 'Phiên làm việc đã hết hạn hoặc được đăng nhập ở thiết bị khác. Vui lòng đăng nhập lại.';
+      notifyListeners();
+    };
+  }
+
+  void clearMessages() {
+    _errorMessage = null;
+    _successMessage = null;
+    notifyListeners();
+  }
 
   Future<void> initialize() async {
     final token = await _apiClient.getAccessToken();
@@ -21,6 +46,7 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// 1. Đăng ký tài khoản người dùng mới
   Future<bool> register({
     required String email,
     required String username,
@@ -29,15 +55,19 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     _setLoading(true);
     _errorMessage = null;
+    _successMessage = null;
 
     try {
-      final response = await _apiClient.dio.post('/api/v1/auth/register', data: {
-        'email': email,
-        'username': username,
+      final clientInfo = await ClientDetector.getClientInfo();
+      final payload = {
+        'email': email.trim(),
+        'username': username.trim(),
         'password': password,
-        'display_name': displayName,
-      });
+        'display_name': displayName.trim(),
+        ...clientInfo.toJson(),
+      };
 
+      final response = await _apiClient.dio.post('/api/v1/auth/register', data: payload);
       final tokens = response.data['tokens'];
       await _apiClient.saveTokens(
         accessToken: tokens['access_token'],
@@ -45,11 +75,12 @@ class AuthProvider extends ChangeNotifier {
       );
 
       _currentUser = UserModel.fromJson(response.data['user']);
+      _successMessage = response.data['message'] ?? 'Đăng ký tài khoản thành công.';
       _setLoading(false);
       notifyListeners();
       return true;
     } on DioException catch (e) {
-      _errorMessage = e.response?.data?['detail'] ?? 'Đăng ký thất bại, vui lòng thử lại.';
+      _errorMessage = _extractErrorMessage(e, fallback: 'Đăng ký không thành công.');
       _setLoading(false);
       return false;
     } catch (e) {
@@ -59,16 +90,30 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> login({required String email, required String password}) async {
+  /// 2. Đăng nhập bằng Email/Password
+  Future<bool> login({
+    required String email,
+    required String password,
+  }) async {
+    if (isLockedOut) {
+      _errorMessage = 'Tài khoản đang bị khóa tạm thời. Thử lại sau $_lockoutSeconds giây.';
+      notifyListeners();
+      return false;
+    }
+
     _setLoading(true);
     _errorMessage = null;
+    _successMessage = null;
 
     try {
-      final response = await _apiClient.dio.post('/api/v1/auth/login', data: {
-        'email': email,
+      final clientInfo = await ClientDetector.getClientInfo();
+      final payload = {
+        'email': email.trim(),
         'password': password,
-      });
+        ...clientInfo.toJson(),
+      };
 
+      final response = await _apiClient.dio.post('/api/v1/auth/login', data: payload);
       final tokens = response.data['tokens'];
       await _apiClient.saveTokens(
         accessToken: tokens['access_token'],
@@ -76,11 +121,17 @@ class AuthProvider extends ChangeNotifier {
       );
 
       _currentUser = UserModel.fromJson(response.data['user']);
+      _successMessage = response.data['message'] ?? 'Đăng nhập thành công.';
       _setLoading(false);
       notifyListeners();
       return true;
     } on DioException catch (e) {
-      _errorMessage = e.response?.data?['detail'] ?? 'Đăng nhập không thành công.';
+      if (e.response?.statusCode == 429) {
+        _startLockoutTimer(900); // 15 minutes lockout
+        _errorMessage = 'Đã nhập sai mật khẩu quá 5 lần liên tiếp. Tài khoản tạm khóa trong 15 phút.';
+      } else {
+        _errorMessage = _extractErrorMessage(e, fallback: 'Email hoặc mật khẩu không chính xác.');
+      }
       _setLoading(false);
       return false;
     } catch (e) {
@@ -90,15 +141,20 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> devLogin({String username = 'k6_fan_vip'}) async {
+  /// 3. Đăng nhập / Đăng ký qua Google OAuth ID Token
+  Future<bool> googleLogin({required String idToken}) async {
     _setLoading(true);
     _errorMessage = null;
+    _successMessage = null;
 
     try {
-      final response = await _apiClient.dio.post('/api/v1/auth/dev-login', data: {
-        'username': username,
-      });
+      final clientInfo = await ClientDetector.getClientInfo();
+      final payload = {
+        'id_token': idToken,
+        ...clientInfo.toJson(),
+      };
 
+      final response = await _apiClient.dio.post('/api/v1/auth/google', data: payload);
       final tokens = response.data['tokens'];
       await _apiClient.saveTokens(
         accessToken: tokens['access_token'],
@@ -106,11 +162,12 @@ class AuthProvider extends ChangeNotifier {
       );
 
       _currentUser = UserModel.fromJson(response.data['user']);
+      _successMessage = response.data['message'] ?? 'Đăng nhập Google thành công.';
       _setLoading(false);
       notifyListeners();
       return true;
     } on DioException catch (e) {
-      _errorMessage = e.response?.data?['detail'] ?? 'Dev login thất bại.';
+      _errorMessage = _extractErrorMessage(e, fallback: 'Đăng nhập qua Google thất bại.');
       _setLoading(false);
       return false;
     } catch (e) {
@@ -120,25 +177,243 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// 4. Lấy URL ủy quyền Google OAuth2 cho Web/Desktop
+  Future<String?> getGoogleAuthUrl() async {
+    try {
+      final response = await _apiClient.dio.get('/api/v1/auth/google/login');
+      return response.data['url'];
+    } catch (e) {
+      _errorMessage = 'Không thể lấy URL đăng nhập Google: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// 5. Gửi mã OTP xác thực qua Email
+  Future<bool> sendEmailOtp({
+    required String email,
+    required String purpose, // "VERIFY_EMAIL", "OAUTH_SET_PASSWORD", "RESET_PASSWORD", "DELETE_ACCOUNT"
+  }) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post('/api/v1/auth/email/send-otp', data: {
+        'email': email.trim(),
+        'purpose': purpose,
+      });
+
+      _successMessage = response.data['message'] ?? 'Mã OTP đã được gửi tới email.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Không thể gửi mã OTP.');
+      _setLoading(false);
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      return false;
+    }
+  }
+
+  /// 6. Xác thực mã OTP
+  Future<bool> verifyEmailOtp({
+    required String email,
+    required String code,
+    required String purpose,
+  }) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post('/api/v1/auth/email/verify-otp', data: {
+        'email': email.trim(),
+        'code': code.trim(),
+        'purpose': purpose,
+      });
+
+      if (purpose == 'VERIFY_EMAIL' && _currentUser != null) {
+        _currentUser = _currentUser!.copyWith(isEmailVerified: true);
+      }
+
+      _successMessage = response.data['message'] ?? 'Xác thực OTP thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Mã OTP không hợp lệ hoặc đã hết hạn.');
+      _setLoading(false);
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      return false;
+    }
+  }
+
+  /// 7. Thiết lập mật khẩu cho tài khoản Google OAuth
+  Future<bool> oauthSetPassword({
+    required String newPassword,
+    required String otpCode,
+  }) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post('/api/v1/auth/password/oauth-set', data: {
+        'new_password': newPassword,
+        'otp_code': otpCode.trim(),
+      });
+
+      if (_currentUser != null) {
+        _currentUser = _currentUser!.copyWith(hasPassword: true);
+      }
+
+      _successMessage = response.data['message'] ?? 'Thiết lập mật khẩu thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Thiết lập mật khẩu không thành công.');
+      _setLoading(false);
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      return false;
+    }
+  }
+
+  /// 8. Lấy hồ sơ tài khoản hiện tại
   Future<void> fetchMe() async {
     try {
       final response = await _apiClient.dio.get('/api/v1/users/me');
       _currentUser = UserModel.fromJson(response.data);
       notifyListeners();
-    } catch (_) {
-      _currentUser = null;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        _currentUser = null;
+        await _apiClient.clearTokens();
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// 9. Lấy danh sách các phiên thiết bị đang hoạt động
+  Future<List<SessionModel>> listSessions() async {
+    try {
+      final response = await _apiClient.dio.get('/api/v1/auth/sessions');
+      final list = (response.data as List).map((s) => SessionModel.fromJson(s)).toList();
+      return list;
+    } catch (e) {
+      _errorMessage = 'Không thể tải danh sách phiên đăng nhập: $e';
       notifyListeners();
+      return [];
     }
   }
 
+  /// 10. Thu hồi một phiên thiết bị cụ thể
+  Future<bool> revokeSession(String sessionId) async {
+    try {
+      await _apiClient.dio.post('/api/v1/auth/sessions/$sessionId/revoke');
+      _successMessage = 'Đã thu hồi phiên đăng nhập thành công.';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _errorMessage = 'Lỗi thu hồi phiên: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// 11. Đăng xuất khỏi tất cả các thiết bị khác
+  Future<bool> revokeAllOtherSessions() async {
+    try {
+      final response = await _apiClient.dio.post('/api/v1/auth/sessions/revoke-all');
+      _successMessage = response.data['message'] ?? 'Đã đăng xuất khỏi các thiết bị khác.';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _errorMessage = 'Không thể thu hồi các phiên khác: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// 12. Yêu cầu xóa mềm tài khoản
+  Future<bool> deleteAccount({String? password, String? otpCode}) async {
+    _setLoading(true);
+    _errorMessage = null;
+
+    try {
+      final payload = <String, dynamic>{};
+      if (password != null) payload['password'] = password;
+      if (otpCode != null) payload['otp_code'] = otpCode;
+      final response = await _apiClient.dio.post('/api/v1/auth/delete-account', data: payload);
+
+      await logout();
+      _successMessage = response.data['message'] ?? 'Tài khoản đã được xóa thành công.';
+      _setLoading(false);
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Xóa tài khoản không thành công.');
+      _setLoading(false);
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      return false;
+    }
+  }
+
+  /// 13. Đăng xuất tài khoản
   Future<void> logout() async {
-    await _apiClient.clearTokens();
     _currentUser = null;
+    await _apiClient.clearTokens();
+    _errorMessage = null;
+    _successMessage = 'Đã đăng xuất thành công.';
     notifyListeners();
+  }
+
+  void _startLockoutTimer(int seconds) {
+    _lockoutSeconds = seconds;
+    _lockoutTimer?.cancel();
+    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_lockoutSeconds > 0) {
+        _lockoutSeconds--;
+        notifyListeners();
+      } else {
+        timer.cancel();
+        notifyListeners();
+      }
+    });
   }
 
   void _setLoading(bool value) {
     _isLoading = value;
     notifyListeners();
+  }
+
+  String _extractErrorMessage(DioException e, {required String fallback}) {
+    final data = e.response?.data;
+    if (data is Map && data.containsKey('detail')) {
+      final detail = data['detail'];
+      if (detail is String) return detail;
+      if (detail is List && detail.isNotEmpty) {
+        return detail.map((d) => d['msg'] ?? d.toString()).join(', ');
+      }
+    }
+    return fallback;
+  }
+
+  @override
+  void dispose() {
+    _lockoutTimer?.cancel();
+    super.dispose();
   }
 }
