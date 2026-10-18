@@ -1,3 +1,9 @@
+"""Identity and Authentication Database Models.
+
+This module defines the relational schema for User entities, System Roles,
+Platform Types, and multi-device User Sessions with Refresh Token Rotation.
+"""
+
 import enum
 import uuid
 from datetime import datetime, timezone
@@ -9,18 +15,54 @@ from app.core.database import Base
 
 
 class SystemRole(str, enum.Enum):
+    """System-level access roles for platform governance.
+
+    Attributes:
+        USER: Standard platform participant with basic interaction permissions.
+        SYSTEM_MODERATOR: Content and community moderator with violation enforcement tools.
+        SYSTEM_ADMIN: Supreme administrator with full infrastructure and user management access.
+    """
     USER = "USER"
     SYSTEM_MODERATOR = "SYSTEM_MODERATOR"
     SYSTEM_ADMIN = "SYSTEM_ADMIN"
 
 
 class PlatformType(str, enum.Enum):
+    """Client platforms recognized by the single-session-per-platform policy.
+
+    Attributes:
+        MOBILE: Native Android or iOS mobile application (requires device identifier).
+        DESKTOP: Native desktop application (Linux, Windows, macOS).
+        WEB: Standard web browser client.
+    """
     MOBILE = "MOBILE"
     DESKTOP = "DESKTOP"
     WEB = "WEB"
 
 
 class User(Base):
+    """User account model storing identity, credentials, and verification status.
+
+    Attributes:
+        id (UUID): Primary key uniquely identifying the user.
+        email (str): Unique, indexed email address.
+        username (str): Unique, indexed public username handle.
+        password_hash (str | None): Argon2id hashed password (None for pure OAuth users).
+        display_name (str): Public profile display name.
+        avatar_url (str | None): Profile photo URL.
+        bio (str | None): Short user biography.
+        google_id (str | None): Linked Google subject ID (`sub`), uniquely indexed.
+        is_email_verified (bool): Verification state of user's email address.
+        system_role (str): Assigned SystemRole value ('USER', 'SYSTEM_MODERATOR', 'SYSTEM_ADMIN').
+        is_active (bool): Active status; False denotes deactivated or soft-deleted accounts.
+        deleted_at (datetime | None): Timestamp when account deletion was executed.
+        created_at (datetime): Account creation timestamp.
+        updated_at (datetime): Timestamp of last record update.
+        wallet (Wallet): One-to-one relationship to User's financial wallet.
+        sessions (list[UserSession]): One-to-many active and historical device sessions.
+        fandoms_owned (list[Fandom]): Fandom communities created and owned by this user.
+        fandom_memberships (list[FandomMember]): Memberships in fandom communities.
+    """
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -61,6 +103,23 @@ class User(Base):
 
 
 class UserSession(Base):
+    """Device session record tracking active tokens and device details.
+
+    Attributes:
+        id (UUID): Primary key identifying this specific device session.
+        user_id (UUID): Foreign key to the parent User account.
+        platform (str): Client platform category ('MOBILE', 'DESKTOP', 'WEB').
+        device_id (str | None): Client hardware identifier (mandatory for MOBILE).
+        device_name (str): Parsed human-friendly client hardware and browser label.
+        ip_address (str | None): Client IP recorded during session issuance.
+        user_agent (str | None): Full raw User-Agent string.
+        refresh_token_hash (str): SHA-256 hash of the active refresh token.
+        is_active (bool): Active session flag (False if logged out or replaced).
+        last_active_at (datetime): Timestamp when the session was last refreshed.
+        expires_at (datetime): Expiration cutoff timestamp for the session.
+        created_at (datetime): Timestamp when the session was first initiated.
+        user (User): Relationship back to the owner User.
+    """
     __tablename__ = "user_sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -71,10 +130,10 @@ class UserSession(Base):
     )
     platform: Mapped[str] = mapped_column(
         String(20), nullable=False, index=True
-    )  # MOBILE, DESKTOP, WEB
+    )
     device_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True, index=True
-    )  # Required for MOBILE
+    )
     device_name: Mapped[str] = mapped_column(
         String(150), nullable=False, default="Unknown Device"
     )

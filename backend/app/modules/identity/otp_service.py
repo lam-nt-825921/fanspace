@@ -1,3 +1,10 @@
+"""One-Time Password (OTP) Generation, Verification, and Lifecycle Management.
+
+This module manages the lifecycle of 6-digit numeric OTP verification codes using Redis.
+It implements rate-limiting cooldowns, brute-force attack counters, single-use invalidation,
+and background dispatch of verification emails.
+"""
+
 import enum
 import json
 import secrets
@@ -11,13 +18,21 @@ settings = get_settings()
 
 
 class OTPPurpose(str, enum.Enum):
+    """Enumeration of recognized security purposes for OTP generation.
+
+    Attributes:
+        VERIFY_EMAIL: Account activation following standard registration.
+        OAUTH_SET_PASSWORD: Identity verification before setting a password for an OAuth account.
+        RESET_PASSWORD: Password recovery for forgotten credentials.
+        DELETE_ACCOUNT: Re-authentication before executing account soft deletion.
+    """
     VERIFY_EMAIL = "VERIFY_EMAIL"
     OAUTH_SET_PASSWORD = "OAUTH_SET_PASSWORD"
     RESET_PASSWORD = "RESET_PASSWORD"
     DELETE_ACCOUNT = "DELETE_ACCOUNT"
 
 
-PURPOSE_LABELS = {
+PURPOSE_LABELS: dict[OTPPurpose, str] = {
     OTPPurpose.VERIFY_EMAIL: "Kích hoạt tài khoản FanSpace",
     OTPPurpose.OAUTH_SET_PASSWORD: "Cấp mật khẩu tài khoản FanSpace",
     OTPPurpose.RESET_PASSWORD: "Đặt lại mật khẩu FanSpace",
@@ -26,9 +41,15 @@ PURPOSE_LABELS = {
 
 
 class OTPService:
+    """Service providing static utilities for OTP generation, rate limiting, and verification."""
+
     @staticmethod
     def generate_otp() -> str:
-        """Generate cryptographically secure 6-digit OTP"""
+        """Generates a cryptographically secure 6-digit numeric OTP.
+
+        Returns:
+            str: 6-character string representing digits between 100000 and 999999.
+        """
         return f"{secrets.randbelow(900000) + 100000}"
 
     @classmethod
@@ -39,6 +60,24 @@ class OTPService:
         purpose: OTPPurpose,
         background_tasks: BackgroundTasks,
     ) -> str:
+        """Generates, stores, and enqueues an OTP verification email.
+
+        Enforces a 60-second cooldown per email and a maximum quota of 5 requests
+        per hour. Persists the code in Redis with a 5-minute time-to-live (TTL).
+
+        Args:
+            redis (aioredis.Redis): Active asynchronous Redis connection.
+            email (str): Target recipient email address.
+            purpose (OTPPurpose): The functional operation requiring verification.
+            background_tasks (BackgroundTasks): FastAPI background task manager to dispatch email.
+
+        Returns:
+            str: The generated 6-digit OTP code.
+
+        Raises:
+            HTTPException: 429 Too Many Requests if the 60-second cooldown is active
+                or hourly quota is exceeded.
+        """
         clean_email = email.strip().lower()
         cooldown_key = f"ratelimit:otp:cooldown:{purpose.value}:{clean_email}"
 
@@ -83,6 +122,24 @@ class OTPService:
         code: str,
         purpose: OTPPurpose,
     ) -> bool:
+        """Validates a candidate OTP code against Redis storage.
+
+        Implements single-use consumption upon match and increments the failure counter
+        on mismatch. Revokes the code completely if failed attempts reach `settings.OTP_MAX_ATTEMPTS`.
+
+        Args:
+            redis (aioredis.Redis): Active asynchronous Redis connection.
+            email (str): Target email address associated with the code.
+            code (str): Candidate 6-digit OTP code submitted by the user.
+            purpose (OTPPurpose): The functional operation being verified.
+
+        Returns:
+            bool: True if the code matches and was successfully consumed.
+
+        Raises:
+            HTTPException: 400 Bad Request if the code does not exist, has expired,
+                has exceeded maximum retry attempts, or is incorrect.
+        """
         clean_email = email.strip().lower()
         otp_key = f"otp:{purpose.value}:{clean_email}"
 

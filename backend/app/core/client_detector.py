@@ -1,3 +1,11 @@
+"""Client and Device Detection Module.
+
+This module provides tools to accurately extract client networking and hardware
+fingerprints from incoming HTTP requests. It prioritizes reverse-proxy headers
+(Cloudflare, Nginx) and parses User-Agent strings using `user_agents` to distinguish
+between mobile devices, desktop platforms, and standard web browsers.
+"""
+
 from dataclasses import dataclass
 from fastapi import Request, HTTPException, status
 import user_agents
@@ -5,8 +13,17 @@ import user_agents
 
 @dataclass
 class ClientInfo:
+    """Encapsulates client metadata parsed from an HTTP request.
+
+    Attributes:
+        ip_address (str): Resolved IP address of the client (IPv4 or IPv6).
+        platform (str): Operating platform ('MOBILE', 'DESKTOP', or 'WEB').
+        device_id (str | None): Unique hardware/client identifier (mandatory for MOBILE).
+        device_name (str): Human-readable device and OS identification.
+        user_agent (str): Full raw User-Agent header string.
+    """
     ip_address: str
-    platform: str  # "MOBILE", "DESKTOP", "WEB"
+    platform: str
     device_id: str | None
     device_name: str
     user_agent: str
@@ -17,7 +34,28 @@ def extract_client_info(
     explicit_platform: str | None = None,
     explicit_device_id: str | None = None,
 ) -> ClientInfo:
-    """Extract client IP, platform (MOBILE/DESKTOP/WEB), device ID and parsed device name."""
+    """Extracts client IP, platform type, and device metadata from an HTTP request.
+
+    Resolves the client's true IP by inspecting reverse proxy headers in order:
+    1. 'cf-connecting-ip' (Cloudflare)
+    2. 'x-forwarded-for' (First non-trusted proxy entry)
+    3. 'x-real-ip' (Nginx)
+    4. Fallback to `request.client.host`.
+
+    Validates that client platform is one of ('MOBILE', 'DESKTOP', 'WEB').
+    Enforces the business rule that mobile applications MUST provide a unique `device_id`.
+
+    Args:
+        request (Request): FastAPI request object containing headers and client info.
+        explicit_platform (str | None, optional): Platform string provided in payload.
+        explicit_device_id (str | None, optional): Device ID string provided in payload.
+
+    Returns:
+        ClientInfo: Structured dataclass with client IP, platform, device ID, and name.
+
+    Raises:
+        HTTPException: 400 Bad Request if platform is 'MOBILE' but no device_id is provided.
+    """
     headers = request.headers
 
     # 1. IP extraction
@@ -44,13 +82,11 @@ def extract_client_info(
         device_name = ua_str[:100]
 
     # 3. Platform determination
-    # Priority: explicit payload -> X-Platform header -> User-Agent heuristic
     header_platform = headers.get("x-platform")
     raw_platform = explicit_platform or header_platform
     if raw_platform:
         platform = raw_platform.strip().upper()
     else:
-        # Default fallback: if User-Agent indicates mobile app or browser
         platform = "WEB"
 
     if platform not in ("MOBILE", "DESKTOP", "WEB"):

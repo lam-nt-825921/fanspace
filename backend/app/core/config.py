@@ -1,8 +1,55 @@
+"""Global Application Settings and Environment Configuration.
+
+This module loads and validates environment variables from `.env` using
+Pydantic Settings. It defines defaults for security secrets, database pools,
+Redis cache, Google OAuth2, and SMTP email delivery.
+"""
+
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Application configuration loaded from environment variables and `.env`.
+
+    Attributes:
+        PROJECT_NAME (str): Name of the FastAPI application.
+        ENVIRONMENT (str): Deployment environment ('development', 'staging', 'production').
+        DEBUG (bool): Flag toggling debug mode and verbose logging.
+        PORT (int): HTTP server port.
+        SECRET_KEY (str): Secret key for signing JSON Web Tokens.
+        ALGORITHM (str): JWT signing algorithm (default 'HS256').
+        ACCESS_TOKEN_EXPIRE_MINUTES (int): Lifespan of access tokens in minutes.
+        REFRESH_TOKEN_EXPIRE_DAYS (int): Lifespan of refresh tokens in days.
+        DATABASE_URL (str): Asyncpg PostgreSQL connection URL.
+        DATABASE_POOL_SIZE (int): Maximum persistent connections in the engine pool.
+        DATABASE_MAX_OVERFLOW (int): Additional connections allowed beyond pool size.
+        REDIS_URL (str): Connection URI for Redis.
+        PAYOS_CLIENT_ID (str): Client ID for PayOS payment gateway.
+        PAYOS_API_KEY (str): API key for PayOS.
+        PAYOS_CHECKSUM_KEY (str): Checksum signing key for PayOS.
+        LIVEKIT_URL (str): Host URL for LiveKit WebRTC server.
+        LIVEKIT_API_KEY (str): LiveKit API authentication key.
+        LIVEKIT_API_SECRET (str): LiveKit API secret.
+        GOOGLE_CLIENT_ID (str): Google OAuth2 Web Client ID.
+        GOOGLE_CLIENT_SECRET (str): Google OAuth2 Web Client Secret.
+        GOOGLE_REDIRECT_URI (str): OAuth2 callback URL.
+        SMTP_HOST (str): SMTP server hostname (default 'smtp.gmail.com').
+        SMTP_PORT (int): SMTP server port (587 for TLS).
+        SMTP_USER (str): Email username/address for SMTP authentication.
+        SMTP_PASSWORD (str): SMTP application password.
+        EMAILS_FROM_EMAIL (str): Outgoing email address header.
+        EMAILS_FROM_NAME (str): Sender display name.
+        DEBUG_OTP_IN_RESPONSE (bool): If True, returns `dev_otp` in API responses during dev.
+        OTP_TTL_SECONDS (int): Expiration lifespan of OTP codes in seconds (default 300).
+        OTP_COOLDOWN_SECONDS (int): Minimum interval between OTP requests in seconds (default 60).
+        OTP_MAX_ATTEMPTS (int): Maximum allowed incorrect OTP attempts before revocation (default 5).
+        REGISTER_RATE_LIMIT_MAX (int): Maximum registrations allowed per IP in window (default 5).
+        REGISTER_RATE_LIMIT_WINDOW (int): Rolling window for register rate limit in seconds (default 600).
+        LOGIN_MAX_FAILED_ATTEMPTS (int): Consecutive failed logins before lockout (default 5).
+        LOGIN_LOCKOUT_SECONDS (int): Duration of lockout in seconds (default 900 = 15m).
+    """
+
     PROJECT_NAME: str = "FanSpace Backend API"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
@@ -59,4 +106,9 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
+    """Returns a cached singleton instance of the application Settings.
+
+    Returns:
+        Settings: Initialized configuration object.
+    """
     return Settings()

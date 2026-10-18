@@ -1,3 +1,11 @@
+"""Asynchronous Email Delivery Module.
+
+This module provides non-blocking email dispatch using `aiosmtplib` and standard
+MIME multipart messages. It renders responsive HTML email templates for OTP verification
+and falls back cleanly to terminal console logging during local development or when
+SMTP credentials are not configured.
+"""
+
 import logging
 from email.message import EmailMessage
 import aiosmtplib
@@ -8,10 +16,25 @@ logger = logging.getLogger("fanspace.mailer")
 settings = get_settings()
 
 
-async def send_otp_email(to_email: str, otp: str, purpose_label: str = "Xác thực tài khoản"):
-    """
-    Sends an OTP verification email asynchronously via SMTP (e.g. Gmail).
-    Falls back to console logging in development or if SMTP is not configured.
+async def send_otp_email(
+    to_email: str,
+    otp: str,
+    purpose_label: str = "Xác thực tài khoản",
+) -> None:
+    """Dispatches a one-time password (OTP) verification email.
+
+    Constructs a responsive HTML email containing the 6-digit OTP code,
+    expiration notice (5 minutes), and security instructions.
+    Dispatches via TLS/STARTTLS using the configured SMTP provider (e.g. Google Gmail).
+    In development environments or when SMTP credentials are absent, the code is
+    safely logged to stdout and logger without blocking execution.
+
+    Args:
+        to_email (str): Recipient email address.
+        otp (str): 6-digit numeric verification code.
+        purpose_label (str, optional): User-facing description of the operation
+            (e.g., 'Kích hoạt tài khoản FanSpace', 'Cấp mật khẩu tài khoản').
+            Defaults to 'Xác thực tài khoản'.
     """
     subject = f"[FanSpace] Mã xác thực OTP: {otp}"
 
@@ -43,12 +66,12 @@ async def send_otp_email(to_email: str, otp: str, purpose_label: str = "Xác th�
 
     # Always log to console in dev
     logger.info(f"===> [EMAIL OTP] To: {to_email} | Purpose: {purpose_label} | OTP: {otp} <===")
-    print(f"\n==========================================")
-    print(f"📧 [FanSpace EMAIL OTP]")
+    print("\n==========================================")
+    print("📧 [FanSpace EMAIL OTP]")
     print(f"To: {to_email}")
     print(f"Mục đích: {purpose_label}")
     print(f"MÃ OTP: {otp} (Hiệu lực 5 phút)")
-    print(f"==========================================\n")
+    print("==========================================\n")
 
     if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
         logger.warning("SMTP credentials not configured. Email logged to console only.")
@@ -74,4 +97,3 @@ async def send_otp_email(to_email: str, otp: str, purpose_label: str = "Xác th�
         logger.info(f"Successfully sent OTP email to {to_email} via Gmail SMTP.")
     except Exception as e:
         logger.error(f"Failed to send email via SMTP to {to_email}: {str(e)}")
-        # Do not raise error to client in dev, log it

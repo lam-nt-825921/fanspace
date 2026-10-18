@@ -70,19 +70,15 @@ async def test_auth_register_and_login():
 
 
 @pytest.mark.asyncio
-async def test_dev_fast_login():
-    unique_id = uuid.uuid4().hex[:6]
+async def test_dev_login_endpoint_removed():
+    """Verify that dev backdoor endpoint has been completely removed."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post(
             "/api/v1/auth/dev-login",
-            json={"username": f"k6_bot_{unique_id}"},
+            json={"username": "hacker_bot"},
         )
-        assert res.status_code == 200
-        data = res.json()
-        assert data["success"] is True
-        assert data["user"]["username"] == f"k6_bot_{unique_id}"
-        assert data["user"]["coin_balance"] == 0
+        assert res.status_code == 404 or res.status_code == 405
 
 
 @pytest.mark.asyncio
@@ -92,12 +88,18 @@ async def test_fandom_creation_and_discovery():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Login as dev user
-        login_res = await client.post(
-            "/api/v1/auth/dev-login",
-            json={"username": f"owner_{unique_id}"},
+        # 1. Register a real owner user
+        reg_res = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"owner_{unique_id}@example.com",
+                "username": f"owner_{unique_id}",
+                "password": "StrongPassword123!",
+                "display_name": f"Owner {unique_id}",
+            },
         )
-        token = login_res.json()["tokens"]["access_token"]
+        assert reg_res.status_code == 201
+        token = reg_res.json()["tokens"]["access_token"]
 
         # 2. Create Fandom
         create_res = await client.post(

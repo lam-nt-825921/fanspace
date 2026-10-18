@@ -1,3 +1,10 @@
+"""Identity and Authentication Business Logic Service.
+
+This module implements the core business logic for user registration, credential
+verification, multi-platform device session enforcement, Google OAuth2 account auto-linking,
+password establishment for OAuth profiles, and remote session revocation.
+"""
+
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Callable
@@ -29,7 +36,6 @@ from app.modules.identity.schemas import (
     UserRegister,
     UserLogin,
     GoogleLogin,
-    DevLogin,
     OAuthSetPasswordRequest,
     DeleteAccountRequest,
     Token,
@@ -42,14 +48,21 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 class IdentityService:
+    """Encapsulates authentication, session management, and credential business logic."""
+
     @staticmethod
     async def enforce_single_platform_session(
         db: AsyncSession, user_id: uuid.UUID, platform: str
-    ):
-        """
-        Enforce the Single Active Session per Platform rule:
-        Invalidates any existing active session of this user on the specified platform
-        (MOBILE, DESKTOP, or WEB).
+    ) -> None:
+        """Enforces the Single Active Session per Platform policy.
+
+        Invalidates any existing active session of the specified user on the target
+        platform ('MOBILE', 'DESKTOP', or 'WEB'). Sessions on other platforms remain untouched.
+
+        Args:
+            db (AsyncSession): Active asynchronous database session.
+            user_id (uuid.UUID): ID of the user whose platform sessions are evaluated.
+            platform (str): The platform category ('MOBILE', 'DESKTOP', or 'WEB').
         """
         stmt = (
             update(UserSession)
@@ -70,6 +83,24 @@ class IdentityService:
         client_info: ClientInfo,
         redis: aioredis.Redis,
     ) -> tuple[User, Token]:
+        """Registers a new standard user account with email and password.
+
+        Enforces IP rate limiting, checks for email and username uniqueness,
+        initializes the user wallet with 0 balance, and issues a new session.
+
+        Args:
+            db (AsyncSession): Database session.
+            data (UserRegister): Registration input data.
+            client_info (ClientInfo): Parsed client IP and device metadata.
+            redis (aioredis.Redis): Redis client for rate limiting.
+
+        Returns:
+            tuple[User, Token]: Created user entity and initial token bundle.
+
+        Raises:
+            HTTPException: 429 if the IP rate limit is exceeded.
+            HTTPException: 400 if email or username already exists.
+        """
         # 1. Rate limiting by IP
         await RateLimiter.check_register_limit(redis, client_info.ip_address)
 
@@ -147,6 +178,24 @@ class IdentityService:
         client_info: ClientInfo,
         redis: aioredis.Redis,
     ) -> tuple[User, Token]:
+        """Authenticates a user via email and password credentials.
+
+        Checks account lockout thresholds, validates the password against stored Argon2id hash,
+        enforces the single-platform session rule, and issues new tokens.
+
+        Args:
+            db (AsyncSession): Database session.
+            data (UserLogin): User credentials.
+            client_info (ClientInfo): Parsed client IP and device metadata.
+            redis (aioredis.Redis): Redis client for lockout tracking.
+
+        Returns:
+            tuple[User, Token]: Authenticated user entity and token bundle.
+
+        Raises:
+            HTTPException: 429 if the account is currently locked out.
+            HTTPException: 401 if credentials are invalid or password mismatch.
+        """
         # 1. Check lockout rate limit
         await RateLimiter.check_login_lockout(redis, data.email)
 
@@ -215,6 +264,24 @@ class IdentityService:
         data: GoogleLogin,
         client_info: ClientInfo,
     ) -> tuple[User, Token]:
+        """Authenticates or registers a user via Google OAuth2.
+
+        Verifies the Google ID token. If the Google subject ID or email is already
+        registered, automatically links the Google account. If brand new, provisions
+        a new user account with `is_email_verified=True` and wallet balance of 0.
+
+        Args:
+            db (AsyncSession): Database session.
+            data (GoogleLogin): Google OAuth payload.
+            client_info (ClientInfo): Parsed client IP and device metadata.
+
+        Returns:
+            tuple[User, Token]: Logged in user entity and token bundle.
+
+        Raises:
+            HTTPException: 401 if Google ID token verification fails.
+            HTTPException: 400 if required token or email is absent.
+        """
         google_sub = None
         google_email = None
         display_name = data.display_name or "Google User"
@@ -231,7 +298,6 @@ class IdentityService:
                 display_name = id_info.get("name", display_name)
                 avatar_url = id_info.get("picture", avatar_url)
             except Exception as e:
-                # In development fallback if fake token
                 if not settings.DEBUG:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -261,7 +327,6 @@ class IdentityService:
             result = await db.execute(query)
             user = result.scalar_one_or_none()
             if user:
-                # Auto-link Google Account
                 user.google_id = google_sub
                 user.is_email_verified = True
                 if not user.avatar_url and avatar_url:
@@ -329,69 +394,6 @@ class IdentityService:
         )
         return user, tokens
 
-    @classmethod
-    async def dev_login(
-        cls,
-        db: AsyncSession,
-        data: DevLogin,
-        client_info: ClientInfo,
-    ) -> tuple[User, Token]:
-        query = select(User).where(User.username == data.username, User.is_active == True).options(selectinload(User.wallet))
-        result = await db.execute(query)
-        user = result.scalar_one_or_none()
-
-        if not user:
-            user = User(
-                email=f"{data.username}@fanspace.local",
-                username=data.username,
-                display_name=f"Dev Fan {data.username}",
-                system_role=SystemRole.USER.value,
-                is_email_verified=True,
-                is_active=True,
-            )
-            db.add(user)
-            await db.flush()
-
-            wallet = Wallet(user_id=user.id, coin_balance=0)
-            db.add(wallet)
-
-        await cls.enforce_single_platform_session(db, user.id, client_info.platform)
-
-        session_id = uuid.uuid4()
-        access_token = create_access_token({
-            "sub": str(user.id),
-            "username": user.username,
-            "session_id": str(session_id),
-            "system_role": user.system_role,
-        })
-        refresh_token = create_refresh_token({
-            "sub": str(user.id),
-            "session_id": str(session_id),
-        })
-
-        session = UserSession(
-            id=session_id,
-            user_id=user.id,
-            platform=client_info.platform,
-            device_id=client_info.device_id,
-            device_name=client_info.device_name,
-            ip_address=client_info.ip_address,
-            user_agent=client_info.user_agent,
-            refresh_token_hash=hash_token(refresh_token),
-            is_active=True,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
-        )
-        db.add(session)
-        await db.commit()
-        await db.refresh(user, ["wallet"])
-
-        tokens = Token(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            session_id=session_id,
-        )
-        return user, tokens
-
     @staticmethod
     async def oauth_set_password(
         db: AsyncSession,
@@ -399,7 +401,20 @@ class IdentityService:
         data: OAuthSetPasswordRequest,
         redis: aioredis.Redis,
     ) -> dict:
-        """Set password for pure OAuth accounts after verifying Email OTP"""
+        """Sets a password on an OAuth-registered account following OTP verification.
+
+        Args:
+            db (AsyncSession): Database session.
+            user (User): The authenticated OAuth user.
+            data (OAuthSetPasswordRequest): Candidate OTP and desired new password.
+            redis (aioredis.Redis): Redis client for OTP verification.
+
+        Returns:
+            dict: Success confirmation message.
+
+        Raises:
+            HTTPException: 400 if OTP is incorrect or expired.
+        """
         await OTPService.verify_otp(redis, user.email, data.otp, OTPPurpose.OAUTH_SET_PASSWORD)
         user.password_hash = get_password_hash(data.new_password)
         await db.commit()
@@ -412,7 +427,23 @@ class IdentityService:
         data: DeleteAccountRequest,
         redis: aioredis.Redis,
     ) -> dict:
-        """Soft delete account with password or email OTP verification"""
+        """Executes soft account deletion and revokes all active device sessions.
+
+        Requires password confirmation if the account has a password set, or email
+        OTP verification if the account is purely social OAuth.
+
+        Args:
+            db (AsyncSession): Database session.
+            user (User): The user requesting account deletion.
+            data (DeleteAccountRequest): Password or OTP verification credentials.
+            redis (aioredis.Redis): Redis client for OTP verification.
+
+        Returns:
+            dict: Success confirmation message.
+
+        Raises:
+            HTTPException: 400 if confirmation password or OTP is missing or incorrect.
+        """
         if user.password_hash:
             if not data.password or not verify_password(data.password, user.password_hash):
                 raise HTTPException(
@@ -451,6 +482,23 @@ class IdentityService:
         refresh_token_str: str,
         client_info: ClientInfo,
     ) -> Token:
+        """Rotates a refresh token and issues a new access token.
+
+        Validates session existence and verifies that the refresh token hash matches
+        the active session record. Immediately rotates the refresh token material
+        to protect against token replay/theft attacks.
+
+        Args:
+            db (AsyncSession): Database session.
+            refresh_token_str (str): Raw refresh token JWT presented by the client.
+            client_info (ClientInfo): Parsed client IP and device metadata.
+
+        Returns:
+            Token: Fresh token bundle containing new access token and rotated refresh token.
+
+        Raises:
+            HTTPException: 401 if token is expired, invalid, or replayed.
+        """
         credentials_exception = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Phiên làm việc không hợp lệ hoặc đã hết hạn.",
@@ -483,7 +531,6 @@ class IdentityService:
 
         # Verify refresh token hash to guard against token theft / reuse
         if session.refresh_token_hash != hash_token(refresh_token_str):
-            # Token reuse detected! Invalidate this compromised session
             session.is_active = False
             await db.commit()
             raise HTTPException(
@@ -525,6 +572,16 @@ class IdentityService:
     async def list_sessions(
         db: AsyncSession, user_id: uuid.UUID, current_session_id: uuid.UUID | None
     ) -> list[SessionOut]:
+        """Lists all active device sessions for a user account.
+
+        Args:
+            db (AsyncSession): Database session.
+            user_id (uuid.UUID): ID of the user whose sessions to retrieve.
+            current_session_id (uuid.UUID | None): ID of the active caller session.
+
+        Returns:
+            list[SessionOut]: Active session metadata ordered by last activity time.
+        """
         query = (
             select(UserSession)
             .where(UserSession.user_id == user_id, UserSession.is_active == True)
@@ -551,6 +608,16 @@ class IdentityService:
     async def revoke_session(
         db: AsyncSession, user_id: uuid.UUID, session_id: uuid.UUID
     ) -> bool:
+        """Revokes a specific device session owned by the user.
+
+        Args:
+            db (AsyncSession): Database session.
+            user_id (uuid.UUID): ID of the user who owns the session.
+            session_id (uuid.UUID): ID of the session to terminate.
+
+        Returns:
+            bool: True if the session was found and deactivated, False otherwise.
+        """
         stmt = (
             update(UserSession)
             .where(UserSession.id == session_id, UserSession.user_id == user_id)
@@ -564,6 +631,16 @@ class IdentityService:
     async def revoke_all_other_sessions(
         db: AsyncSession, user_id: uuid.UUID, current_session_id: uuid.UUID
     ) -> int:
+        """Terminates all active device sessions for a user except the current session.
+
+        Args:
+            db (AsyncSession): Database session.
+            user_id (uuid.UUID): ID of the user.
+            current_session_id (uuid.UUID): The session to keep active.
+
+        Returns:
+            int: The number of sessions that were deactivated.
+        """
         stmt = (
             update(UserSession)
             .where(
@@ -582,6 +659,18 @@ async def get_current_user_and_session(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> tuple[User, uuid.UUID | None]:
+    """Dependency validating JWT access tokens and confirming device session validity.
+
+    Args:
+        token (str): Injected Bearer token from HTTP Authorization header.
+        db (AsyncSession): Injected database session.
+
+    Returns:
+        tuple[User, uuid.UUID | None]: The authenticated User and their session ID.
+
+    Raises:
+        HTTPException: 401 if token is expired, invalid, user inactive, or session revoked.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Phiên đăng nhập không hợp lệ hoặc đã hết hạn.",
@@ -628,10 +717,26 @@ async def get_current_user_and_session(
 async def get_current_user(
     auth_data: tuple[User, uuid.UUID | None] = Depends(get_current_user_and_session)
 ) -> User:
+    """Dependency extracting the authenticated User from verified token claims.
+
+    Args:
+        auth_data (tuple[User, uuid.UUID | None]): Resolved user and session from parent dependency.
+
+    Returns:
+        User: Active authenticated user entity.
+    """
     return auth_data[0]
 
 
 def require_system_role(*allowed_roles: str) -> Callable:
+    """Dependency factory enforcing system-level role-based access control.
+
+    Args:
+        *allowed_roles (str): Variable list of required SystemRole names.
+
+    Returns:
+        Callable: FastAPI dependency function validating that current user has an allowed role.
+    """
     async def role_checker(user: User = Depends(get_current_user)) -> User:
         if user.system_role not in allowed_roles:
             raise HTTPException(

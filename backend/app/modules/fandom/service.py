@@ -1,3 +1,10 @@
+"""Fandom Domain Service.
+
+This module provides business logic for creating new fandom spaces, setting up
+initial creator roles and permissions, querying the public directory, and generating
+preview summaries.
+"""
+
 import uuid
 from datetime import datetime
 from fastapi import HTTPException, status
@@ -12,8 +19,27 @@ from app.modules.fandom.schemas import FandomCreate, FandomSummary, FandomDetail
 
 
 class FandomService:
+    """Service providing core fandom community management operations."""
+
     @staticmethod
     async def create_fandom(db: AsyncSession, owner: User, data: FandomCreate) -> Fandom:
+        """Provisions a new fandom community and grants the creator supreme Owner role.
+
+        Validates slug uniqueness, creates the Fandom entity, provisions an Owner role
+        with full `ADMINISTRATOR` bitmask permissions, and enrolls the creator as an
+        ACTIVE member.
+
+        Args:
+            db (AsyncSession): Active database session.
+            owner (User): Authenticated user creating the community.
+            data (FandomCreate): Parameters defining the new fandom.
+
+        Returns:
+            Fandom: The newly initialized and committed Fandom database record.
+
+        Raises:
+            HTTPException: 400 Bad Request if the slug is already registered.
+        """
         # Check slug uniqueness
         query = select(Fandom).where(Fandom.slug == data.slug.lower())
         result = await db.execute(query)
@@ -81,6 +107,20 @@ class FandomService:
         category: str | None = None,
         limit: int = 20,
     ) -> list[FandomSummary]:
+        """Queries the public fandom directory filtered by keywords and category.
+
+        Orders communities primarily by member count descending to surface the most
+        active spaces first.
+
+        Args:
+            db (AsyncSession): Active database session.
+            search (str | None, optional): Optional keyword to match against name, slug, or description.
+            category (str | None, optional): Optional category filter.
+            limit (int, optional): Maximum number of results to return (1-100, default 20).
+
+        Returns:
+            list[FandomSummary]: List of summary objects for public listing.
+        """
         query = select(Fandom).options(selectinload(Fandom.owner))
 
         if category and category.lower() != "all" and category.lower() != "tất cả":
@@ -122,6 +162,21 @@ class FandomService:
         slug: str,
         current_user: User | None = None,
     ) -> FandomDetail:
+        """Retrieves detailed preview metadata for a fandom community by slug.
+
+        Calculates `is_owner` and `is_member` contextual flags if a user is authenticated.
+
+        Args:
+            db (AsyncSession): Active database session.
+            slug (str): Unique URL slug of the fandom space.
+            current_user (User | None, optional): Currently logged-in user, or None if unauthenticated.
+
+        Returns:
+            FandomDetail: Complete preview details.
+
+        Raises:
+            HTTPException: 404 Not Found if no fandom matches the provided slug.
+        """
         query = select(Fandom).where(Fandom.slug == slug.lower()).options(selectinload(Fandom.owner))
         result = await db.execute(query)
         fandom = result.scalar_one_or_none()
@@ -137,7 +192,6 @@ class FandomService:
 
         if current_user:
             is_owner = fandom.owner_id == current_user.id
-            # Check membership
             mem_query = select(FandomMember).where(
                 FandomMember.fandom_id == fandom.id,
                 FandomMember.user_id == current_user.id,
