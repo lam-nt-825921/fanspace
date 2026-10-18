@@ -27,6 +27,29 @@ class Settings(BaseSettings):
     LIVEKIT_API_KEY: str = ""
     LIVEKIT_API_SECRET: str = ""
 
+    # Google OAuth2
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+
+    # SMTP Mailer (e.g. Gmail SMTP)
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    EMAILS_FROM_EMAIL: str = ""
+    EMAILS_FROM_NAME: str = "FanSpace Security"
+    DEBUG_OTP_IN_RESPONSE: bool = True
+
+    # Security & Rate Limiting
+    OTP_TTL_SECONDS: int = 300  # 5 minutes
+    OTP_COOLDOWN_SECONDS: int = 60  # 1 minute
+    OTP_MAX_ATTEMPTS: int = 5
+    REGISTER_RATE_LIMIT_MAX: int = 5
+    REGISTER_RATE_LIMIT_WINDOW: int = 600  # 10 minutes
+    LOGIN_MAX_FAILED_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_SECONDS: int = 900  # 15 minutes
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

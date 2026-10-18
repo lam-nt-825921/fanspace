@@ -42,6 +42,8 @@ class Fandom(Base):
     owner = relationship("User", back_populates="fandoms_owned")
     members = relationship("FandomMember", back_populates="fandom", cascade="all, delete-orphan")
     roles = relationship("Role", back_populates="fandom", cascade="all, delete-orphan")
+    invites = relationship("FandomInvite", back_populates="fandom", cascade="all, delete-orphan")
+    join_requests = relationship("FandomJoinRequest", back_populates="fandom", cascade="all, delete-orphan")
 
 
 class FandomMember(Base):
@@ -65,3 +67,57 @@ class FandomMember(Base):
     # Relationships
     fandom = relationship("Fandom", back_populates="members")
     user = relationship("User", back_populates="fandom_memberships")
+
+
+class FandomInvite(Base):
+    __tablename__ = "fandom_invites"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    fandom_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fandoms.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    uses_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    # Relationships
+    fandom = relationship("Fandom", back_populates="invites")
+    creator = relationship("User")
+
+
+class FandomJoinRequest(Base):
+    __tablename__ = "fandom_join_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    fandom_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fandoms.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)  # PENDING, APPROVED, REJECTED
+    answers_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    # Relationships
+    fandom = relationship("Fandom", back_populates="join_requests")
+    user = relationship("User", foreign_keys=[user_id])
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
+

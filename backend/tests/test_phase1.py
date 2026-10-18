@@ -56,32 +56,33 @@ async def test_auth_register_and_login():
             json={"email": email, "password": password},
         )
         assert good_login.status_code == 200
-        assert "tokens" in good_login.json()
+        active_token = good_login.json()["tokens"]["access_token"]
 
         # 5. Get current user profile (/me)
         me_res = await client.get(
             "/api/v1/users/me",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {active_token}"},
         )
         assert me_res.status_code == 200
         me_data = me_res.json()
         assert me_data["username"] == username
-        assert me_data["coin_balance"] == 500  # Welcome bonus
+        assert me_data["coin_balance"] == 0  # No free money: real balance starts at 0
 
 
 @pytest.mark.asyncio
 async def test_dev_fast_login():
+    unique_id = uuid.uuid4().hex[:6]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post(
             "/api/v1/auth/dev-login",
-            json={"username": "k6_bot_99"},
+            json={"username": f"k6_bot_{unique_id}"},
         )
         assert res.status_code == 200
         data = res.json()
         assert data["success"] is True
-        assert data["user"]["username"] == "k6_bot_99"
-        assert data["user"]["coin_balance"] == 10000
+        assert data["user"]["username"] == f"k6_bot_{unique_id}"
+        assert data["user"]["coin_balance"] == 0
 
 
 @pytest.mark.asyncio
