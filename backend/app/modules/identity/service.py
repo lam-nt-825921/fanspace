@@ -5,10 +5,11 @@ verification, multi-platform device session enforcement, Google OAuth2 account a
 password establishment for OAuth profiles, and remote session revocation.
 """
 
+import json
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Callable
-from fastapi import HTTPException, status, Depends
+from fastapi import BackgroundTasks, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,30 +83,34 @@ class IdentityService:
         data: UserRegister,
         client_info: ClientInfo,
         redis: aioredis.Redis,
-    ) -> tuple[User, Token]:
-        """Registers a new standard user account with email and password.
+        background_tasks: BackgroundTasks,
+    ) -> str:
+        """Stages a new user registration request in Redis and dispatches an OTP email.
 
-        Enforces IP rate limiting, checks for email and username uniqueness,
-        initializes the user wallet with 0 balance, and issues a new session.
+        Does NOT insert into PostgreSQL or issue JWT tokens until the user verifies
+        ownership of the email via the 6-digit OTP code. The staged request automatically
+        expires after `settings.PENDING_REGISTRATION_TTL_SECONDS` (default 10 minutes).
 
         Args:
-            db (AsyncSession): Database session.
+            db (AsyncSession): Database session to check existing accounts.
             data (UserRegister): Registration input data.
             client_info (ClientInfo): Parsed client IP and device metadata.
-            redis (aioredis.Redis): Redis client for rate limiting.
+            redis (aioredis.Redis): Redis client for rate limiting and staging.
+            background_tasks (BackgroundTasks): FastAPI background task manager for SMTP dispatch.
 
         Returns:
-            tuple[User, Token]: Created user entity and initial token bundle.
+            str: The generated 6-digit OTP code.
 
         Raises:
-            HTTPException: 429 if the IP rate limit is exceeded.
-            HTTPException: 400 if email or username already exists.
+            HTTPException: 429 if IP rate limit or OTP cooldown is exceeded.
+            HTTPException: 400 if email or username is already registered or reserved.
         """
-        # 1. Rate limiting by IP
-        await RateLimiter.check_register_limit(redis, client_info.ip_address)
+        clean_email = str(data.email).strip().lower()
+        clean_username = data.username.strip()
+        clean_username_lower = clean_username.lower()
 
-        # 2. Check existing email or username
-        query = select(User).where((User.email == data.email) | (User.username == data.username))
+        # 1. Check existing email or username in PostgreSQL first
+        query = select(User).where((User.email == clean_email) | (User.username == clean_username))
         result = await db.execute(query)
         if result.scalar_one_or_none():
             raise HTTPException(
@@ -113,28 +118,133 @@ class IdentityService:
                 detail="Email hoặc Tên tài khoản (username) đã được sử dụng.",
             )
 
-        # 3. Hash password & create user
-        hashed_pwd = get_password_hash(data.password)
+        # 2. Check if username is currently reserved by another pending registration in Redis
+        username_res_key = f"pending_reg:username:{clean_username_lower}"
+        reserved_by_email = await redis.get(username_res_key)
+        if reserved_by_email and reserved_by_email != clean_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tên tài khoản (username) này đang được giữ chỗ bởi một yêu cầu đăng ký khác. Vui lòng chọn tên khác hoặc thử lại sau 10 phút.",
+            )
+
+        # 3. Enforce IP registration rate limit
+        await RateLimiter.check_register_limit(redis, client_info.ip_address)
+
+        # 4. Generate and send 6-digit OTP email (enforces 60s cooldown & 5/hr quota)
+        otp_code = await OTPService.send_otp(
+            redis, clean_email, OTPPurpose.VERIFY_EMAIL, background_tasks
+        )
+
+        # 5. Clean up old username reservation if this email previously staged a different username
+        pending_email_key = f"pending_reg:email:{clean_email}"
+        old_raw = await redis.get(pending_email_key)
+        if old_raw:
+            try:
+                old_data = json.loads(old_raw)
+                old_uname = old_data.get("username", "").lower()
+                if old_uname and old_uname != clean_username_lower:
+                    await redis.delete(f"pending_reg:username:{old_uname}")
+            except Exception:
+                pass
+
+        # 6. Stage registration payload in Redis with auto-cancel TTL (10 minutes)
+        staged_payload = {
+            "email": clean_email,
+            "username": clean_username,
+            "password_hash": get_password_hash(data.password),
+            "display_name": data.display_name.strip(),
+            "platform": client_info.platform,
+            "device_id": client_info.device_id,
+            "device_name": client_info.device_name,
+            "ip_address": client_info.ip_address,
+            "user_agent": client_info.user_agent,
+        }
+        ttl = settings.PENDING_REGISTRATION_TTL_SECONDS
+        await redis.set(pending_email_key, json.dumps(staged_payload), ex=ttl)
+        await redis.set(username_res_key, clean_email, ex=ttl)
+
+        return otp_code
+
+    @classmethod
+    async def complete_registration(
+        cls,
+        db: AsyncSession,
+        redis: aioredis.Redis,
+        email: str,
+        code: str,
+    ) -> tuple[User, Token]:
+        """Verifies the registration OTP and provisions the User, Wallet, and Session in PostgreSQL.
+
+        Args:
+            db (AsyncSession): Active asynchronous database session.
+            redis (aioredis.Redis): Active Redis connection holding staged registration & OTP.
+            email (str): Email address being verified.
+            code (str): 6-digit OTP code submitted by the user.
+
+        Returns:
+            tuple[User, Token]: Created User entity and initial JWT Token bundle.
+
+        Raises:
+            HTTPException: 400 if staged registration has expired/does not exist, OTP is invalid,
+                or email/username was claimed concurrently.
+        """
+        clean_email = email.strip().lower()
+        pending_email_key = f"pending_reg:email:{clean_email}"
+
+        # 1. Ensure staged registration exists and hasn't auto-expired (10m TTL)
+        raw_pending = await redis.get(pending_email_key)
+        if not raw_pending:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Yêu cầu đăng ký không tồn tại hoặc đã tự hủy do quá thời hạn (10 phút). Vui lòng đăng ký lại.",
+            )
+
+        # 2. Verify OTP code (revokes both OTP and pending_reg if 5 wrong attempts are reached)
+        await OTPService.verify_otp(redis, clean_email, code, OTPPurpose.VERIFY_EMAIL)
+
+        try:
+            staged = json.loads(raw_pending)
+        except Exception:
+            await redis.delete(pending_email_key)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Dữ liệu đăng ký tạm thời không hợp lệ. Vui lòng đăng ký lại.",
+            )
+
+        username = staged["username"]
+        username_res_key = f"pending_reg:username:{username.lower()}"
+
+        # 3. Double-check uniqueness in PostgreSQL against race conditions
+        query = select(User).where((User.email == clean_email) | (User.username == username))
+        result = await db.execute(query)
+        if result.scalar_one_or_none():
+            await redis.delete(pending_email_key)
+            await redis.delete(username_res_key)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email hoặc Tên tài khoản (username) đã được sử dụng.",
+            )
+
+        # 4. Provision verified User & 0-balance Wallet in PostgreSQL
         user = User(
-            email=data.email,
-            username=data.username,
-            password_hash=hashed_pwd,
-            display_name=data.display_name,
+            email=clean_email,
+            username=username,
+            password_hash=staged["password_hash"],
+            display_name=staged["display_name"],
             system_role=SystemRole.USER.value,
-            is_email_verified=False,
+            is_email_verified=True,
             is_active=True,
         )
         db.add(user)
         await db.flush()
 
-        # 4. Create wallet with 0 coins initial balance (Real money rule)
         wallet = Wallet(user_id=user.id, coin_balance=0)
         db.add(wallet)
 
-        # 5. Single session per platform
-        await cls.enforce_single_platform_session(db, user.id, client_info.platform)
+        # 5. Enforce single active session per platform & issue JWT tokens
+        platform = staged.get("platform") or "WEB"
+        await cls.enforce_single_platform_session(db, user.id, platform)
 
-        # 6. Issue tokens & create UserSession
         session_id = uuid.uuid4()
         access_token = create_access_token({
             "sub": str(user.id),
@@ -150,11 +260,11 @@ class IdentityService:
         session = UserSession(
             id=session_id,
             user_id=user.id,
-            platform=client_info.platform,
-            device_id=client_info.device_id,
-            device_name=client_info.device_name,
-            ip_address=client_info.ip_address,
-            user_agent=client_info.user_agent,
+            platform=platform,
+            device_id=staged.get("device_id"),
+            device_name=staged.get("device_name") or "Web Browser",
+            ip_address=staged.get("ip_address"),
+            user_agent=staged.get("user_agent"),
             refresh_token_hash=hash_token(refresh_token),
             is_active=True,
             expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
@@ -162,6 +272,10 @@ class IdentityService:
         db.add(session)
         await db.commit()
         await db.refresh(user, ["wallet"])
+
+        # 6. Delete staged keys from Redis immediately
+        await redis.delete(pending_email_key)
+        await redis.delete(username_res_key)
 
         tokens = Token(
             access_token=access_token,
@@ -279,40 +393,44 @@ class IdentityService:
             tuple[User, Token]: Logged in user entity and token bundle.
 
         Raises:
-            HTTPException: 401 if Google ID token verification fails.
-            HTTPException: 400 if required token or email is absent.
+            HTTPException: 401 if Google ID token verification fails or email is unverified.
+            HTTPException: 500 if GOOGLE_CLIENT_ID is not configured on the server.
         """
-        google_sub = None
-        google_email = None
-        display_name = data.display_name or "Google User"
-        avatar_url = data.avatar_url
+        if not settings.GOOGLE_CLIENT_ID:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Hệ thống chưa cấu hình GOOGLE_CLIENT_ID để xác thực Google OAuth.",
+            )
 
-        # 1. Verify Google ID token if provided
-        if data.id_token and settings.GOOGLE_CLIENT_ID:
-            try:
-                id_info = google_id_token.verify_oauth2_token(
-                    data.id_token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
-                )
-                google_sub = id_info.get("sub")
-                google_email = id_info.get("email")
-                display_name = id_info.get("name", display_name)
-                avatar_url = id_info.get("picture", avatar_url)
-            except Exception as e:
-                if not settings.DEBUG:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail=f"Mã Google ID token không hợp lệ: {str(e)}",
-                    )
-                google_sub = data.id_token[:40]
-                google_email = str(data.email) if data.email else f"google_{google_sub}@gmail.com"
-        else:
-            if not data.email:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cần cung cấp Google ID token hoặc email để đăng nhập.",
-                )
-            google_email = str(data.email)
-            google_sub = f"mock_google_{google_email}"
+        # 1. Strictly verify Google ID token with Google's public keys
+        try:
+            id_info = google_id_token.verify_oauth2_token(
+                data.id_token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Mã Google ID token không hợp lệ hoặc đã hết hạn: {str(e)}",
+            )
+
+        if id_info.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Nhà phát hành (issuer) của Google ID token không hợp lệ.",
+            )
+
+        google_sub = id_info.get("sub")
+        google_email = id_info.get("email")
+        email_verified = id_info.get("email_verified", False)
+
+        if not google_sub or not google_email or not email_verified:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Tài khoản Google không hợp lệ hoặc email chưa được Google xác minh.",
+            )
+
+        display_name = id_info.get("name") or google_email.split("@")[0]
+        avatar_url = id_info.get("picture")
 
         # 2. Check if user already exists by google_id
         user = None

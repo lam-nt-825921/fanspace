@@ -34,6 +34,8 @@ from app.modules.identity.schemas import (
     DeleteAccountRequest,
     SessionOut,
     AuthResponse,
+    RegisterInitResponse,
+    OTPVerifyResponse,
     MessageResponse,
     OTPSendResponse,
     GoogleAuthUrlResponse,
@@ -81,37 +83,41 @@ def to_user_out(user: User) -> UserOut:
 
 @auth_router.post(
     "/register",
-    response_model=AuthResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Đăng ký tài khoản người dùng mới",
+    response_model=RegisterInitResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Khởi tạo yêu cầu đăng ký tài khoản (lưu tạm Redis & gửi OTP)",
     description="""
-    Khởi tạo tài khoản mới bằng Email và Mật khẩu:
-    - **Kiểm tra trùng lặp**: Xác thực tính duy nhất của Email và Username.
-    - **Ghi nhận phiên & thiết bị**: Lưu vết IP và User-Agent (với ứng dụng di động bắt buộc kèm `device_id`).
-    - **Quy tắc 1 phiên/nền tảng**: Hủy các phiên cũ cùng nền tảng (`MOBILE`, `DESKTOP`, `WEB`).
-    - **Ví số dư 0**: Khởi tạo ví tài chính cá nhân với số dư `0` xu ban đầu.
+    Ghi nhận yêu cầu đăng ký tạm thời trên Redis và gửi mã OTP 6 số về Email:
+    - **Chưa tạo tài khoản trong DB**: Bảo vệ cơ sở dữ liệu khỏi tài khoản rác chưa xác thực email.
+    - **Tự động hủy sau 10 phút**: Yêu cầu đăng ký tạm (`pending_reg`) tự hủy nếu không xác thực OTP trong 10 phút.
+    - **Kiểm tra trùng lặp & giữ chỗ**: Xác thực Email và Username chưa tồn tại trong DB và chưa bị giữ chỗ.
     - **Rate Limit**: Giới hạn tối đa 5 lượt đăng ký trên mỗi địa chỉ IP trong vòng 10 phút.
     """,
     responses={
-        400: {"description": "Email hoặc Username đã tồn tại, hoặc thiếu Device ID cho Mobile"},
-        429: {"description": "Địa chỉ IP đã vượt quá giới hạn đăng ký cho phép"},
+        400: {"description": "Email hoặc Username đã tồn tại/đang được giữ chỗ, hoặc thiếu Device ID cho Mobile"},
+        429: {"description": "Địa chỉ IP đã vượt quá giới hạn đăng ký hoặc đang trong thời gian chờ OTP cooldown"},
     },
 )
 async def register(
     data: UserRegister,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
 ):
-    """Handles standard user registration and token issuance."""
+    """Stages user registration in Redis (10m TTL) and dispatches OTP verification email."""
     client_info = extract_client_info(request, data.platform, data.device_id)
-    user, tokens = await IdentityService.register(db, data, client_info, redis)
-    return AuthResponse(
+    otp_code = await IdentityService.register(db, data, client_info, redis, background_tasks)
+    clean_email = str(data.email).strip().lower()
+    return RegisterInitResponse(
         success=True,
-        message="Đăng ký tài khoản thành công.",
-        tokens=tokens,
-        user=to_user_out(user),
+        require_otp=True,
+        email=clean_email,
+        expires_in_seconds=settings.PENDING_REGISTRATION_TTL_SECONDS,
+        message=f"Mã OTP xác thực đã được gửi tới {clean_email}. Vui lòng xác thực trong vòng 5 phút để tạo tài khoản (yêu cầu tự hủy sau 10 phút).",
+        dev_otp=otp_code if (settings.DEBUG and settings.DEBUG_OTP_IN_RESPONSE) else None,
     )
+
 
 
 @auth_router.post(
@@ -246,6 +252,16 @@ async def google_oauth_callback(
             )
         token_data = res.json()
         id_token_val = token_data.get("id_token")
+        if not id_token_val:
+            error_detail = "Phản hồi từ Google không chứa id_token hợp lệ."
+            if is_browser:
+                return RedirectResponse(
+                    url=f"http://localhost:3000/auth/callback?error={urllib.parse.quote(error_detail)}"
+                )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_detail,
+            )
 
     client_info = extract_client_info(request)
     user, tokens = await IdentityService.google_login(
@@ -313,40 +329,73 @@ async def exchange_oauth_ticket(
     summary="Gửi mã xác thực OTP qua Email",
     description="""
     Sinh mã OTP ngẫu nhiên 6 số và gửi tới email của người dùng:
+    - **Chống spam email lạ**: Với `VERIFY_EMAIL`, bắt buộc phải có yêu cầu đăng ký tạm (`pending_reg`) đang tồn tại trên Redis. Với các mục đích khác, email phải thuộc về tài khoản đang hoạt động.
     - **Lưu trữ Redis**: TTL 5 phút (300 giây).
-    - **Chống spam**: Cooldown 60 giây giữa các lần yêu cầu, tối đa 5 mã/giờ.
-    - **Mục đích**: `VERIFY_EMAIL`, `OAUTH_SET_PASSWORD`, `RESET_PASSWORD`, `DELETE_ACCOUNT`.
+    - **Chống spam tần suất**: Cooldown 60 giây giữa các lần yêu cầu, tối đa 5 mã/giờ.
     """,
     responses={
+        400: {"description": "Không tìm thấy yêu cầu đăng ký hợp lệ hoặc tài khoản không tồn tại"},
         429: {"description": "Đang trong thời gian chờ cooldown 60s hoặc đã vượt quá 5 mã/giờ"},
     },
 )
 async def send_email_otp(
     data: EmailSendOTPRequest,
     background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
 ):
-    """Generates and sends an OTP code via email in background."""
-    code = await OTPService.send_otp(redis, data.email, data.purpose, background_tasks)
+    """Generates and sends an OTP code via email in background after verifying request legitimacy."""
+    clean_email = str(data.email).strip().lower()
+
+    if data.purpose == OTPPurpose.VERIFY_EMAIL:
+        pending_key = f"pending_reg:email:{clean_email}"
+        raw_pending = await redis.get(pending_key)
+        if not raw_pending:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không tìm thấy yêu cầu đăng ký đang chờ xác thực cho email này (hoặc đã tự hủy sau 10 phút). Vui lòng đăng ký lại.",
+            )
+        # Refresh 10-minute TTL on pending registration when user legitimately requests OTP resend
+        await redis.expire(pending_key, settings.PENDING_REGISTRATION_TTL_SECONDS)
+        try:
+            staged = orjson.loads(raw_pending)
+            uname = staged.get("username", "").lower()
+            if uname:
+                await redis.expire(
+                    f"pending_reg:username:{uname}",
+                    settings.PENDING_REGISTRATION_TTL_SECONDS,
+                )
+        except Exception:
+            pass
+    else:
+        query = select(User).where(User.email == clean_email, User.is_active == True)
+        result = await db.execute(query)
+        if not result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không tìm thấy tài khoản hoạt động tương ứng với địa chỉ email này.",
+            )
+
+    code = await OTPService.send_otp(redis, clean_email, data.purpose, background_tasks)
     return OTPSendResponse(
         success=True,
-        message=f"Mã OTP xác thực đã được gửi tới {data.email}. Hiệu lực trong 5 phút.",
+        message=f"Mã OTP xác thực đã được gửi tới {clean_email}. Hiệu lực trong 5 phút.",
         dev_otp=code if (settings.DEBUG and settings.DEBUG_OTP_IN_RESPONSE) else None,
     )
 
 
 @auth_router.post(
     "/email/verify-otp",
-    response_model=MessageResponse,
-    summary="Xác thực mã OTP và kích hoạt tài khoản",
+    response_model=OTPVerifyResponse,
+    summary="Xác thực mã OTP và chính thức khởi tạo tài khoản",
     description="""
     Xác nhận mã OTP 6 số người dùng nhập:
     - **Single-use**: Mã bị hủy ngay sau khi xác thực thành công.
-    - **Chống Brute-force**: Hủy mã nếu nhập sai quá 5 lần liên tiếp.
-    - **Kích hoạt tài khoản**: Nếu mục đích là `VERIFY_EMAIL`, cập nhật `is_email_verified = True`.
+    - **Chống Brute-force**: Hủy cả mã OTP lẫn yêu cầu đăng ký tạm nếu nhập sai quá 5 lần liên tiếp.
+    - **Khởi tạo tài khoản (`VERIFY_EMAIL`)**: Chính thức tạo `User` (`is_email_verified = True`), `Wallet` (0 xu), `UserSession` trong PostgreSQL và trả về cặp JWT `tokens` + `user`.
     """,
     responses={
-        400: {"description": "Mã OTP không tồn tại, hết hạn, hoặc nhập sai"},
+        400: {"description": "Yêu cầu đăng ký đã tự hủy, hoặc mã OTP không tồn tại, hết hạn, nhập sai"},
     },
 )
 async def verify_email_otp(
@@ -354,21 +403,24 @@ async def verify_email_otp(
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
 ):
-    """Verifies an OTP and activates the user's email if valid."""
-    await OTPService.verify_otp(redis, data.email, data.code, data.purpose)
-
+    """Verifies an OTP and provisions the user account in PostgreSQL when purpose is VERIFY_EMAIL."""
     if data.purpose == OTPPurpose.VERIFY_EMAIL:
-        query = select(User).where(User.email == data.email)
-        result = await db.execute(query)
-        user = result.scalar_one_or_none()
-        if user:
-            user.is_email_verified = True
-            await db.commit()
+        user, tokens = await IdentityService.complete_registration(
+            db, redis, str(data.email), data.code
+        )
+        return OTPVerifyResponse(
+            success=True,
+            message="Xác thực mã OTP thành công. Tài khoản đã được tạo và kích hoạt.",
+            tokens=tokens,
+            user=to_user_out(user),
+        )
 
-    return MessageResponse(
+    await OTPService.verify_otp(redis, str(data.email), data.code, data.purpose)
+    return OTPVerifyResponse(
         success=True,
-        message="Xác thực mã OTP thành công. Tài khoản đã được kích hoạt.",
+        message="Xác thực mã OTP thành công.",
     )
+
 
 
 @auth_router.post(
