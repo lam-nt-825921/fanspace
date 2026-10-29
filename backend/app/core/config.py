@@ -88,6 +88,20 @@ class Settings(BaseSettings):
     EMAILS_FROM_NAME: str = "FanSpace Security"
     DEBUG_OTP_IN_RESPONSE: bool = True
 
+    # Cloudinary Media Storage & Upload Quotas
+    CLOUDINARY_CLOUD_NAME: str = ""
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+    MEDIA_MAX_AVATAR_BYTES: int = 2 * 1024 * 1024  # 2 MB max for user/fandom avatars
+    MEDIA_MAX_BANNER_BYTES: int = 5 * 1024 * 1024  # 5 MB max for user/fandom banners
+    MEDIA_MAX_IMAGE_BYTES: int = 5 * 1024 * 1024  # 5 MB max for general/illustration images
+    MEDIA_MAX_VIDEO_BYTES: int = 15 * 1024 * 1024  # 15 MB max for short videos
+    MEDIA_MAX_VIDEO_DURATION_SECONDS: float = 60.0  # 60s max duration for short clips
+    MEDIA_MAX_ILLUSTRATION_COUNT: int = 5  # Max 5 media items per fandom profile
+    MEDIA_MAX_ILLUSTRATION_VIDEOS: int = 1  # Max 1 short video in fandom illustrations
+    MEDIA_UPLOAD_RATE_LIMIT_MAX: int = 10  # Max 10 uploads per user per minute
+    MEDIA_UPLOAD_RATE_LIMIT_WINDOW: int = 60  # 60 seconds window
+
     # Security & Rate Limiting
     PENDING_REGISTRATION_TTL_SECONDS: int = 600  # 10 minutes auto-cancel for unverified registration
     OTP_TTL_SECONDS: int = 300  # 5 minutes

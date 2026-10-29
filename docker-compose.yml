@@ -55,20 +55,6 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://fanspace:fanspace_password@postgres:5432/fanspace_db
       - REDIS_URL=redis://redis:6379/0
-      - PORT=8000
-      - ENVIRONMENT=development
-      - DEBUG=true
-      - SECRET_KEY=fanspace-super-secret-scientific-benchmark-key-change-in-prod
-      - ALGORITHM=HS256
-      - ACCESS_TOKEN_EXPIRE_MINUTES=30
-      - REFRESH_TOKEN_EXPIRE_DAYS=7
-      - GOOGLE_CLIENT_ID=282351853301-svrittqkk76n3biil9l93l0a6fvj9nja.apps.googleusercontent.com
-      - GOOGLE_CLIENT_SECRET=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
-      - GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
-      - SMTP_USER=lamgiaoda@gmail.com
-      - SMTP_PASSWORD=usgqvdowsashpunc
-      - EMAILS_FROM_EMAIL=lamgiaoda@gmail.com
-      - DEBUG_OTP_IN_RESPONSE=true
     ports:
       - "8000:8000"
     depends_on:
