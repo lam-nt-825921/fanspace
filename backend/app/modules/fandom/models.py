@@ -21,8 +21,9 @@ class Fandom(Base):
     banner_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     illustration_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
     owner_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     admission_mode: Mapped[str] = mapped_column(String(20), default="OPEN", nullable=False)
     rules_tos: Mapped[str | None] = mapped_column(Text, nullable=True)
     member_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

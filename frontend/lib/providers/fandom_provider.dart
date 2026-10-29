@@ -11,6 +11,7 @@ class FandomProvider extends ChangeNotifier {
   List<String> _categories = AppConstants.defaultCategories;
   String _selectedCategory = 'Tất cả';
   String _searchQuery = '';
+  String _sortBy = 'popular';
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -18,6 +19,7 @@ class FandomProvider extends ChangeNotifier {
   List<String> get categories => _categories;
   String get selectedCategory => _selectedCategory;
   String get searchQuery => _searchQuery;
+  String get sortBy => _sortBy;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 
@@ -31,13 +33,17 @@ class FandomProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> fetchPublicFandoms() async {
+  Future<void> fetchPublicFandoms({int limit = 20, int offset = 0}) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      final Map<String, dynamic> queryParams = {};
+      final Map<String, dynamic> queryParams = {
+        'sort_by': _sortBy,
+        'limit': limit,
+        'offset': offset,
+      };
       if (_selectedCategory != 'Tất cả') {
         queryParams['category'] = _selectedCategory;
       }
@@ -79,6 +85,14 @@ class FandomProvider extends ChangeNotifier {
     fetchPublicFandoms();
   }
 
+  void setSortBy(String sortBy) {
+    if (_sortBy != sortBy) {
+      _sortBy = sortBy;
+      notifyListeners();
+      fetchPublicFandoms();
+    }
+  }
+
   Future<bool> createFandom({
     required String name,
     required String slug,
@@ -86,7 +100,9 @@ class FandomProvider extends ChangeNotifier {
     required String category,
     String? avatarUrl,
     String? bannerUrl,
+    List<String> illustrationUrls = const [],
     String admissionMode = 'OPEN',
+    bool isPublic = true,
     String? rulesTos,
   }) async {
     _isLoading = true;
@@ -101,7 +117,9 @@ class FandomProvider extends ChangeNotifier {
         'category': category,
         'avatar_url': avatarUrl,
         'banner_url': bannerUrl,
+        'illustration_urls': illustrationUrls,
         'admission_mode': admissionMode,
+        'is_public': isPublic,
         'rules_tos': rulesTos,
       });
 

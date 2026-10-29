@@ -988,6 +988,34 @@ async def get_current_user(
     return auth_data[0]
 
 
+optional_oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/api/v1/auth/login",
+    auto_error=False,
+)
+
+
+async def get_optional_current_user(
+    token: str | None = Depends(optional_oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Dependency resolving the authenticated User when a valid Bearer token is provided, or None for guests.
+
+    Args:
+        token (str | None): Optional Bearer token from HTTP Authorization header.
+        db (AsyncSession): Database session.
+
+    Returns:
+        User | None: Active authenticated user if token is valid, otherwise None.
+    """
+    if not token:
+        return None
+    try:
+        user, _ = await get_current_user_and_session(token=token, db=db)
+        return user
+    except HTTPException:
+        return None
+
+
 def require_system_role(*allowed_roles: str) -> Callable:
     """Dependency factory enforcing system-level role-based access control.
 

@@ -582,6 +582,9 @@ async def revoke_all_other_sessions(
     )
 
 
+from app.modules.media.service import MediaService
+
+
 @auth_router.post(
     "/delete-account",
     response_model=MessageResponse,
@@ -598,12 +601,16 @@ async def revoke_all_other_sessions(
 )
 async def delete_account(
     data: DeleteAccountRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
 ):
     """Executes account soft deletion following identity confirmation."""
+    old_avatar = current_user.avatar_url
     result = await IdentityService.delete_account(db, current_user, data, redis)
+    if old_avatar:
+        background_tasks.add_task(MediaService.cleanup_replaced_urls, [old_avatar], [])
     return MessageResponse(success=True, message=result["message"])
 
 
@@ -629,10 +636,12 @@ async def get_me(current_user: User = Depends(get_current_user)):
 )
 async def update_me(
     data: UserUpdateProfile,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Updates profile properties for the currently authenticated user."""
+    old_avatar = current_user.avatar_url
     if data.display_name is not None:
         current_user.display_name = data.display_name.strip()
     if data.avatar_url is not None:
@@ -642,6 +651,14 @@ async def update_me(
 
     await db.commit()
     await db.refresh(current_user)
+
+    if data.avatar_url is not None and old_avatar != current_user.avatar_url:
+        background_tasks.add_task(
+            MediaService.cleanup_replaced_urls,
+            [old_avatar],
+            [current_user.avatar_url],
+        )
+
     return to_user_out(current_user)
 
 

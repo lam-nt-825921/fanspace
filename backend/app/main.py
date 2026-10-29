@@ -17,6 +17,7 @@ from app.core.database import engine, init_db
 from app.core.redis import redis_client
 from app.modules.identity.router import auth_router, users_router
 from app.modules.fandom.router import fandom_router
+from app.modules.media.router import media_router
 
 settings = get_settings()
 
@@ -33,6 +34,10 @@ tags_metadata = [
     {
         "name": "Fandoms",
         "description": "Khởi tạo, tìm kiếm và khám phá các cộng đồng người hâm mộ (Fandom) công khai.",
+    },
+    {
+        "name": "Media",
+        "description": "Tải lên, kiểm duyệt định dạng và dọn dẹp tệp phương tiện (Ảnh / Short Video) trên Cloudinary CDN.",
     },
     {
         "name": "System",
@@ -80,6 +85,7 @@ app = FastAPI(
     - **Single Platform Session**: Giới hạn tối đa 1 phiên hoạt động cho mỗi nền tảng (`MOBILE`, `DESKTOP`, `WEB`).
     - **Security & Rate Limiting**: Chống brute-force đăng nhập (khóa 15 phút sau 5 lần sai), rate limit đăng ký theo IP, và Refresh Token Rotation tuân thủ RFC 7519 (`jti`).
     - **Fandom Core**: Khởi tạo và khám phá cộng đồng người hâm mộ với slug tùy chỉnh và quản lý thành viên.
+    - **Shared Media Storage**: Tải lên và quản lý vòng đời ảnh/short video qua Cloudinary CDN.
     """,
     openapi_tags=tags_metadata,
     lifespan=lifespan,
@@ -100,6 +106,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(fandom_router)
+app.include_router(media_router)
 
 
 @app.get(
