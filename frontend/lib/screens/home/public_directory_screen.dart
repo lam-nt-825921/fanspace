@@ -10,6 +10,7 @@ import '../auth/widgets/active_sessions_dialog.dart';
 import '../auth/widgets/email_otp_dialog.dart';
 import '../auth/widgets/oauth_set_password_dialog.dart';
 import '../profile/user_settings_dialog.dart';
+import '../profile/user_card_dialog.dart';
 
 
 class PublicDirectoryScreen extends StatefulWidget {
@@ -84,7 +85,11 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
             // User Avatar Menu
             PopupMenuButton<String>(
               onSelected: (value) {
-                if (value == 'settings') {
+                if (value == 'view_card') {
+                  if (auth.currentUser != null) {
+                    UserCardDialog.show(context, identifier: auth.currentUser!.id);
+                  }
+                } else if (value == 'settings') {
                   UserSettingsDialog.show(context);
                 } else if (value == 'admin_portal') {
                   context.push('/admin/permissions');
@@ -138,12 +143,22 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
                 ),
                 const PopupMenuDivider(),
                 const PopupMenuItem(
+                  value: 'view_card',
+                  child: Row(
+                    children: [
+                      Icon(Icons.badge_outlined, color: AppTheme.accent, size: 18),
+                      SizedBox(width: 8),
+                      Text('Xem thẻ hồ sơ cá nhân', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
                   value: 'settings',
                   child: Row(
                     children: [
                       Icon(Icons.manage_accounts_outlined, color: AppTheme.primary, size: 18),
                       SizedBox(width: 8),
-                      Text('Cài đặt & Hồ sơ cá nhân', style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text('Cài đặt & Hồ sơ cá nhân'),
                     ],
                   ),
                 ),
@@ -217,12 +232,17 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
                 child: CircleAvatar(
                   backgroundColor: AppTheme.primary,
                   radius: 18,
-                  child: Text(
-                    (auth.currentUser?.displayName.isNotEmpty == true)
-                        ? auth.currentUser!.displayName[0].toUpperCase()
-                        : 'U',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
+                  backgroundImage: (auth.currentUser?.avatarUrl != null && auth.currentUser!.avatarUrl!.isNotEmpty)
+                      ? NetworkImage(auth.currentUser!.avatarUrl!)
+                      : null,
+                  child: (auth.currentUser?.avatarUrl == null || auth.currentUser!.avatarUrl!.isEmpty)
+                      ? Text(
+                          (auth.currentUser?.displayName.isNotEmpty == true)
+                              ? auth.currentUser!.displayName[0].toUpperCase()
+                              : 'U',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        )
+                      : null,
                 ),
               ),
             ),
@@ -554,7 +574,7 @@ class _FandomCard extends StatelessWidget {
                             ? Image.network(
                                 fandom.avatarUrl!,
                                 fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => _avatarFallback(),
+                                errorBuilder: (_, _, _) => _avatarFallback(),
                               )
                             : _avatarFallback(),
                       ),
@@ -600,9 +620,34 @@ class _FandomCard extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const Text(
-                        'Xem hồ sơ →',
-                        style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold, fontSize: 12),
+                      InkWell(
+                        onTap: () {
+                          UserCardDialog.show(
+                            context,
+                            identifier: fandom.ownerId,
+                            fallbackName: fandom.ownerName,
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.person_outline, size: 12, color: AppTheme.primary),
+                              const SizedBox(width: 3),
+                              Text(
+                                fandom.ownerName,
+                                style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.bold),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),

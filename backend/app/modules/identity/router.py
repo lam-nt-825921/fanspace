@@ -11,7 +11,7 @@ import httpx
 import orjson
 from fastapi import APIRouter, Depends, status, Request, BackgroundTasks, HTTPException
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
 
@@ -42,6 +42,7 @@ from app.modules.identity.schemas import (
     GoogleAuthUrlResponse,
     RevokeAllSessionsResponse,
     UserUpdateProfile,
+    UserProfilePublic,
     PasswordChangeRequest,
 )
 from app.core.security import get_password_hash, verify_password
@@ -72,6 +73,7 @@ def to_user_out(user: User) -> UserOut:
         username=user.username,
         display_name=user.display_name,
         avatar_url=user.avatar_url,
+        banner_url=user.banner_url,
         bio=user.bio,
         coin_balance=user.wallet.coin_balance if user.wallet else 0,
         is_email_verified=user.is_email_verified,
@@ -583,6 +585,7 @@ async def revoke_all_other_sessions(
 
 
 from app.modules.media.service import MediaService
+from app.modules.fandom.models import Fandom, FandomMember
 
 
 @auth_router.post(
@@ -632,34 +635,164 @@ async def get_me(current_user: User = Depends(get_current_user)):
     "/me",
     response_model=UserOut,
     summary="Cập nhật hồ sơ tài khoản cá nhân",
-    description="Cập nhật tên hiển thị, ảnh đại diện hoặc tiểu sử bản thân.",
+    description="Cập nhật tên hiển thị, ảnh đại diện, ảnh bìa hoặc tiểu sử bản thân.",
+)
+@users_router.put(
+    "/me/profile",
+    response_model=UserOut,
+    summary="Cập nhật hồ sơ tài khoản cá nhân (alias)",
+    description="Cập nhật tên hiển thị, ảnh đại diện, ảnh bìa hoặc tiểu sử bản thân.",
 )
 async def update_me(
     data: UserUpdateProfile,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """Updates profile properties for the currently authenticated user."""
     old_avatar = current_user.avatar_url
+    old_banner = current_user.banner_url
+
     if data.display_name is not None:
         current_user.display_name = data.display_name.strip()
     if data.avatar_url is not None:
         current_user.avatar_url = data.avatar_url.strip() if data.avatar_url.strip() else None
+    if data.banner_url is not None:
+        current_user.banner_url = data.banner_url.strip() if data.banner_url.strip() else None
     if data.bio is not None:
         current_user.bio = data.bio.strip() if data.bio.strip() else None
 
     await db.commit()
     await db.refresh(current_user)
 
+    old_urls: list[str] = []
+    new_urls: list[str] = []
     if data.avatar_url is not None and old_avatar != current_user.avatar_url:
+        if old_avatar:
+            old_urls.append(old_avatar)
+        if current_user.avatar_url:
+            new_urls.append(current_user.avatar_url)
+    if data.banner_url is not None and old_banner != current_user.banner_url:
+        if old_banner:
+            old_urls.append(old_banner)
+        if current_user.banner_url:
+            new_urls.append(current_user.banner_url)
+
+    if old_urls:
         background_tasks.add_task(
             MediaService.cleanup_replaced_urls,
-            [old_avatar],
-            [current_user.avatar_url],
+            old_urls,
+            new_urls,
         )
 
+    # Invalidate Redis card cache for this user
+    try:
+        await redis.delete(f"cache:user:card:{current_user.id}")
+        await redis.delete(f"cache:user:card:{current_user.username.lower()}")
+    except Exception:
+        pass
+
     return to_user_out(current_user)
+
+
+@users_router.get(
+    "/{identifier}/card",
+    response_model=UserProfilePublic,
+    summary="Xem thẻ hồ sơ tóm tắt người dùng",
+    description="Trả về thông tin hồ sơ diện mạo công khai (avatar, banner, bio, số fandom) phục vụ xem trước khi bấm vào tên người dùng.",
+    responses={
+        404: {"description": "Không tìm thấy người dùng"},
+    },
+)
+@users_router.get(
+    "/{identifier}/profile",
+    response_model=UserProfilePublic,
+    summary="Xem hồ sơ công khai người dùng (alias)",
+    description="Alias của /{identifier}/card.",
+    responses={
+        404: {"description": "Không tìm thấy người dùng"},
+    },
+)
+async def get_user_card(
+    identifier: str,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Fetches public user card projection with fandom counts and Redis Cache-Aside."""
+    clean_identifier = identifier.strip().lower()
+    cache_key = f"cache:user:card:{clean_identifier}"
+
+    try:
+        cached_data = await redis.get(cache_key)
+        if cached_data:
+            return UserProfilePublic.model_validate_json(cached_data)
+    except Exception:
+        pass
+
+    user_uuid = None
+    try:
+        user_uuid = uuid.UUID(identifier.strip())
+    except ValueError:
+        pass
+
+    if user_uuid:
+        query = select(User).where(
+            User.id == user_uuid,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
+    else:
+        query = select(User).where(
+            func.lower(User.username) == clean_identifier,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
+
+    result = await db.execute(query)
+    target_user = result.scalar_one_or_none()
+
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy người dùng.",
+        )
+
+    # Count owned public fandoms
+    owned_query = select(func.count(Fandom.id)).where(
+        Fandom.owner_id == target_user.id,
+        Fandom.is_public.is_(True),
+    )
+    owned_count = (await db.execute(owned_query)).scalar() or 0
+
+    # Count joined fandoms
+    joined_query = select(func.count(FandomMember.id)).where(
+        FandomMember.user_id == target_user.id,
+        FandomMember.status == "ACTIVE",
+    )
+    joined_count = (await db.execute(joined_query)).scalar() or 0
+
+    profile_card = UserProfilePublic(
+        id=target_user.id,
+        username=target_user.username,
+        display_name=target_user.display_name,
+        avatar_url=target_user.avatar_url,
+        banner_url=target_user.banner_url,
+        bio=target_user.bio,
+        system_role=target_user.system_role,
+        created_at=target_user.created_at,
+        fandoms_owned_count=owned_count,
+        fandoms_joined_count=joined_count,
+    )
+
+    try:
+        card_json = profile_card.model_dump_json()
+        await redis.set(f"cache:user:card:{target_user.id}", card_json, ex=120)
+        await redis.set(f"cache:user:card:{target_user.username.lower()}", card_json, ex=120)
+    except Exception:
+        pass
+
+    return profile_card
 
 
 @auth_router.post(

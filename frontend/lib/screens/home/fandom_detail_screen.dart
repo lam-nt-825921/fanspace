@@ -5,6 +5,7 @@ import '../../core/theme/app_theme.dart';
 import '../../models/fandom_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/fandom_provider.dart';
+import '../profile/user_card_dialog.dart';
 
 class FandomDetailScreen extends StatefulWidget {
   final String slug;
@@ -71,7 +72,7 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                     Image.network(
                       fandom.bannerUrl!,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _defaultBanner(),
+                      errorBuilder: (_, _, _) => _defaultBanner(),
                     )
                   else
                     _defaultBanner(),
@@ -110,7 +111,7 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                               ? Image.network(
                                   fandom.avatarUrl!,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => _avatarFallback(fandom.name),
+                                  errorBuilder: (_, _, _) => _avatarFallback(fandom.name),
                                 )
                               : _avatarFallback(fandom.name),
                         ),
@@ -205,8 +206,103 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                     children: [
                       _StatChip(icon: Icons.people_alt, label: '${fandom.memberCount} Thành viên'),
                       const SizedBox(width: 12),
-                      _StatChip(icon: Icons.person_outline, label: 'Chủ Fandom: ${fandom.ownerName}'),
+                      _StatChip(
+                        icon: Icons.person_outline,
+                        label: 'Chủ Fandom: ${fandom.ownerName}',
+                        onTap: () {
+                          UserCardDialog.show(
+                            context,
+                            identifier: fandom.ownerId.isNotEmpty
+                                ? fandom.ownerId
+                                : (fandom.ownerUsername ?? fandom.ownerName),
+                            fallbackName: fandom.ownerName,
+                          );
+                        },
+                      ),
                     ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Dedicated Creator / Owner Card (Bấm vào để mở thẻ xem nhanh hồ sơ cá nhân)
+                  InkWell(
+                    onTap: () {
+                      UserCardDialog.show(
+                        context,
+                        identifier: fandom.ownerId.isNotEmpty
+                            ? fandom.ownerId
+                            : (fandom.ownerUsername ?? fandom.ownerName),
+                        fallbackName: fandom.ownerName,
+                      );
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surface,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35), width: 1.2),
+                      ),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 20,
+                            backgroundColor: AppTheme.primary,
+                            backgroundImage: (fandom.ownerAvatarUrl != null && fandom.ownerAvatarUrl!.isNotEmpty)
+                                ? NetworkImage(fandom.ownerAvatarUrl!)
+                                : null,
+                            child: (fandom.ownerAvatarUrl == null || fandom.ownerAvatarUrl!.isEmpty)
+                                ? Text(
+                                    fandom.ownerName.isNotEmpty ? fandom.ownerName[0].toUpperCase() : 'U',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
+                                  )
+                                : null,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Text('Chủ sở hữu / Người sáng lập: ', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                                    Flexible(
+                                      child: Text(
+                                        fandom.ownerName,
+                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  fandom.ownerUsername != null
+                                      ? '@${fandom.ownerUsername} • Bấm để xem thẻ hồ sơ'
+                                      : 'Bấm để xem thẻ hồ sơ tóm tắt',
+                                  style: const TextStyle(fontSize: 11, color: AppTheme.accent, fontWeight: FontWeight.w500),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.primary.withValues(alpha: 0.5)),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('Xem hồ sơ', style: TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold)),
+                                SizedBox(width: 4),
+                                Icon(Icons.touch_app_outlined, size: 13, color: Colors.white),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 20),
 
@@ -290,7 +386,7 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: fandom.illustrationUrls.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 12),
+                        separatorBuilder: (_, _) => const SizedBox(width: 12),
                         itemBuilder: (context, index) {
                           final url = fandom.illustrationUrls[index];
                           final isVideo = _isVideoUrl(url);
@@ -400,7 +496,7 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
               child: Image.network(
                 imageUrl,
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => Container(
+                errorBuilder: (_, _, _) => Container(
                   color: AppTheme.surface,
                   padding: const EdgeInsets.all(24),
                   child: const Text('Không thể tải ảnh.', style: TextStyle(color: Colors.white)),
@@ -478,7 +574,7 @@ class _MediaCard extends StatelessWidget {
             Image.network(
               displayUrl,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
+              errorBuilder: (_, _, _) => Container(
                 color: AppTheme.surfaceLight,
                 child: Icon(
                   isVideo ? Icons.videocam : Icons.broken_image,
@@ -526,24 +622,53 @@ class _MediaCard extends StatelessWidget {
 class _StatChip extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _StatChip({required this.icon, required this.label});
+  final VoidCallback? onTap;
+
+  const _StatChip({
+    required this.icon,
+    required this.label,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final chip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: AppTheme.surface,
+        color: onTap != null ? AppTheme.primary.withValues(alpha: 0.15) : AppTheme.surface,
         borderRadius: BorderRadius.circular(8),
+        border: onTap != null
+            ? Border.all(color: AppTheme.primary.withValues(alpha: 0.4), width: 0.8)
+            : null,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: AppTheme.textSecondary),
-          const SizedBox(width: 4),
-          Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          Icon(icon, size: 14, color: onTap != null ? AppTheme.primary : AppTheme.textSecondary),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: onTap != null ? FontWeight.w600 : FontWeight.normal,
+              color: onTap != null ? Colors.white : AppTheme.textSecondary,
+            ),
+          ),
+          if (onTap != null) ...[
+            const SizedBox(width: 4),
+            const Icon(Icons.touch_app_outlined, size: 12, color: AppTheme.primary),
+          ],
         ],
       ),
     );
+
+    if (onTap != null) {
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: chip,
+      );
+    }
+    return chip;
   }
 }

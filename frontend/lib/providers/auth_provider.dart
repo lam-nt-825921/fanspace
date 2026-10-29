@@ -387,10 +387,11 @@ class AuthProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Cập nhật hồ sơ cá nhân (Tên hiển thị, avatar, bio)
+  /// Cập nhật hồ sơ cá nhân (Tên hiển thị, avatar, banner, bio)
   Future<bool> updateProfile({
     String? displayName,
     String? avatarUrl,
+    String? bannerUrl,
     String? bio,
   }) async {
     _setLoading(true);
@@ -401,6 +402,7 @@ class AuthProvider extends ChangeNotifier {
       final payload = <String, dynamic>{};
       if (displayName != null) payload['display_name'] = displayName.trim();
       if (avatarUrl != null) payload['avatar_url'] = avatarUrl.trim();
+      if (bannerUrl != null) payload['banner_url'] = bannerUrl.trim();
       if (bio != null) payload['bio'] = bio.trim();
 
       final response = await _apiClient.dio.put('/api/v1/users/me', data: payload);
@@ -419,6 +421,51 @@ class AuthProvider extends ChangeNotifier {
       _setLoading(false);
       notifyListeners();
       return false;
+    }
+  }
+
+  /// Tải lên ảnh / video lên Cloudinary thông qua backend media service
+  /// target: USER_AVATAR, USER_BANNER, FANDOM_AVATAR, FANDOM_BANNER, FANDOM_ILLUSTRATION, etc.
+  Future<String?> uploadMedia({
+    required List<int> bytes,
+    required String filename,
+    required String target,
+    String? fandomId,
+  }) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': MultipartFile.fromBytes(bytes, filename: filename),
+        'target': target,
+        'fandom_id': ?fandomId,
+      });
+
+      final response = await _apiClient.dio.post(
+        '/api/v1/media/upload',
+        data: formData,
+      );
+
+      if (response.data != null && response.data['url'] != null) {
+        return response.data['url'] as String;
+      }
+      return null;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Tải tệp lên thất bại.');
+      notifyListeners();
+      return null;
+    } catch (e) {
+      _errorMessage = 'Lỗi tải tệp: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Lấy thông tin thẻ xem nhanh hồ sơ người dùng (UserProfilePublicModel)
+  Future<UserProfilePublicModel?> getUserCard(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get('/api/v1/users/$identifier/card');
+      return UserProfilePublicModel.fromJson(response.data);
+    } catch (e) {
+      return null;
     }
   }
 

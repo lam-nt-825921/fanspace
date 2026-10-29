@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
@@ -27,7 +28,10 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
   // Profile Form Controllers
   late TextEditingController _displayNameController;
   late TextEditingController _avatarUrlController;
+  late TextEditingController _bannerUrlController;
   late TextEditingController _bioController;
+  bool _isUploadingAvatar = false;
+  bool _isUploadingBanner = false;
 
   // Bank Form Controllers
   final _bankNameController = TextEditingController(text: 'MB Bank (Ngân hàng Quân Đội)');
@@ -66,6 +70,7 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
     final user = auth.currentUser;
     _displayNameController = TextEditingController(text: user?.displayName ?? '');
     _avatarUrlController = TextEditingController(text: user?.avatarUrl ?? '');
+    _bannerUrlController = TextEditingController(text: user?.bannerUrl ?? '');
     _bioController = TextEditingController(text: user?.bio ?? '');
   }
 
@@ -73,6 +78,7 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
   void dispose() {
     _displayNameController.dispose();
     _avatarUrlController.dispose();
+    _bannerUrlController.dispose();
     _bioController.dispose();
     _bankNameController.dispose();
     _accountNumberController.dispose();
@@ -83,11 +89,102 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
     super.dispose();
   }
 
+  Future<void> _pickAndUploadImage({required bool isAvatar}) async {
+    final auth = context.read<AuthProvider>();
+    try {
+      final file = await FilePicker.pickFile(
+        type: FileType.image,
+      );
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không thể đọc dữ liệu tệp được chọn.')),
+          );
+        }
+        return;
+      }
+
+      // Max size limit: 5MB
+      if (bytes.length > 5 * 1024 * 1024) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Kích thước ảnh tối đa là 5MB.')),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        if (isAvatar) {
+          _isUploadingAvatar = true;
+        } else {
+          _isUploadingBanner = true;
+        }
+      });
+
+      final url = await auth.uploadMedia(
+        bytes: bytes,
+        filename: file.name,
+        target: isAvatar ? 'USER_AVATAR' : 'USER_BANNER',
+      );
+
+      if (!mounted) return;
+      setState(() {
+        if (isAvatar) {
+          _isUploadingAvatar = false;
+          if (url != null) {
+            _avatarUrlController.text = url;
+          }
+        } else {
+          _isUploadingBanner = false;
+          if (url != null) {
+            _bannerUrlController.text = url;
+          }
+        }
+      });
+
+      if (url != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isAvatar ? 'Tải ảnh đại diện thành công!' : 'Tải ảnh bìa thành công!'),
+            backgroundColor: AppTheme.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(auth.errorMessage ?? 'Tải ảnh thất bại.'),
+            backgroundColor: AppTheme.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isUploadingAvatar = false;
+        _isUploadingBanner = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Lỗi khi tải ảnh: $e'),
+          backgroundColor: AppTheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   Future<void> _handleSaveProfile() async {
     final auth = context.read<AuthProvider>();
     final success = await auth.updateProfile(
       displayName: _displayNameController.text,
       avatarUrl: _avatarUrlController.text,
+      bannerUrl: _bannerUrlController.text,
       bio: _bioController.text,
     );
 
@@ -352,66 +449,169 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Hồ sơ cá nhân công khai',
+            'Hồ sơ diện mạo cá nhân',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textColor),
           ),
           const SizedBox(height: 4),
           Text(
-            'Thông tin này sẽ hiển thị cho các thành viên trong các Fandom bạn tham gia.',
+            'Thông tin diện mạo (ảnh bìa, ảnh đại diện, tiểu sử) sẽ hiển thị công khai trên thẻ hồ sơ của bạn.',
             style: TextStyle(fontSize: 13, color: subColor),
-          ),
-          const SizedBox(height: 24),
-
-          // Avatar Preview & Input
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 36,
-                backgroundColor: AppTheme.primary,
-                backgroundImage: _avatarUrlController.text.isNotEmpty
-                    ? NetworkImage(_avatarUrlController.text)
-                    : null,
-                child: _avatarUrlController.text.isEmpty
-                    ? Text(
-                        (user?.displayName.isNotEmpty == true)
-                            ? user!.displayName[0].toUpperCase()
-                            : 'U',
-                        style: const TextStyle(fontSize: 28, color: Colors.white, fontWeight: FontWeight.bold),
-                      )
-                    : null,
-              ),
-              const SizedBox(width: 20),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Ảnh đại diện (Avatar URL)', style: TextStyle(fontSize: 13, color: subColor)),
-                    const SizedBox(height: 6),
-                    TextFormField(
-                      controller: _avatarUrlController,
-                      decoration: const InputDecoration(
-                        hintText: 'https://example.com/avatar.png',
-                        prefixIcon: Icon(Icons.image_outlined, size: 20),
-                        isDense: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ),
           const SizedBox(height: 20),
 
-          // Display Name
-          Text('Tên hiển thị công khai', style: TextStyle(fontSize: 13, color: subColor)),
+          // --- LIVE BANNER & AVATAR PREVIEW ---
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.black.withValues(alpha: 0.02),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Banner Box with Upload Button
+                Stack(
+                  children: [
+                    Container(
+                      height: 140,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            AppTheme.primary.withValues(alpha: 0.7),
+                            AppTheme.accent.withValues(alpha: 0.7),
+                          ],
+                        ),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: _bannerUrlController.text.isNotEmpty
+                          ? Image.network(
+                              _bannerUrlController.text,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => const SizedBox(),
+                            )
+                          : null,
+                    ),
+                    Positioned(
+                      top: 10,
+                      right: 10,
+                      child: ElevatedButton.icon(
+                        onPressed: _isUploadingBanner ? null : () => _pickAndUploadImage(isAvatar: false),
+                        icon: _isUploadingBanner
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.camera_alt_outlined, size: 16),
+                        label: Text(
+                          _isUploadingBanner ? 'Đang tải...' : 'Đổi ảnh bìa',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.black.withValues(alpha: 0.6),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Avatar and Upload Button Row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      // Avatar overlapping banner
+                      Transform.translate(
+                        offset: const Offset(0, -30),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isDark ? AppTheme.darkSurface : AppTheme.lightSurface,
+                              width: 3.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.15),
+                                blurRadius: 8,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: CircleAvatar(
+                            radius: 36,
+                            backgroundColor: AppTheme.primary,
+                            backgroundImage: _avatarUrlController.text.isNotEmpty
+                                ? NetworkImage(_avatarUrlController.text)
+                                : null,
+                            child: _avatarUrlController.text.isEmpty
+                                ? Text(
+                                    (user?.displayName.isNotEmpty == true)
+                                        ? user!.displayName[0].toUpperCase()
+                                        : 'U',
+                                    style: const TextStyle(
+                                      fontSize: 26,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  )
+                                : null,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: OutlinedButton.icon(
+                          onPressed: _isUploadingAvatar ? null : () => _pickAndUploadImage(isAvatar: true),
+                          icon: _isUploadingAvatar
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.photo_camera_front_outlined, size: 16),
+                          label: Text(
+                            _isUploadingAvatar ? 'Đang tải...' : 'Đổi ảnh đại diện',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // Display Name (max 50)
+          Text('Tên hiển thị công khai (tối đa 50 ký tự)', style: TextStyle(fontSize: 13, color: subColor)),
           const SizedBox(height: 6),
           TextFormField(
             controller: _displayNameController,
+            maxLength: 50,
             decoration: const InputDecoration(
               hintText: 'Nhập tên hiển thị của bạn',
               prefixIcon: Icon(Icons.badge_outlined, size: 20),
               isDense: true,
+              counterText: '',
             ),
           ),
           const SizedBox(height: 16),
@@ -431,19 +631,60 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
           ),
           const SizedBox(height: 16),
 
-          // Bio
-          Text('Giới thiệu bản thân (Bio)', style: TextStyle(fontSize: 13, color: subColor)),
+          // Bio (max 250)
+          Text('Giới thiệu bản thân / Tiểu sử (tối đa 250 ký tự)', style: TextStyle(fontSize: 13, color: subColor)),
           const SizedBox(height: 6),
           TextFormField(
             controller: _bioController,
             maxLines: 3,
-            maxLength: 300,
+            maxLength: 250,
             decoration: const InputDecoration(
               hintText: 'Chia sẻ đôi nét về bạn hoặc idol mà bạn yêu thích...',
               alignLabelWithHint: true,
             ),
           ),
           const SizedBox(height: 16),
+
+          // Advanced / Direct URLs Expansion Tile
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: Text(
+                'Tùy chỉnh liên kết URL ảnh trực tiếp',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: subColor),
+              ),
+              children: [
+                const SizedBox(height: 6),
+                Text('URL ảnh đại diện', style: TextStyle(fontSize: 12, color: subColor)),
+                const SizedBox(height: 4),
+                TextFormField(
+                  controller: _avatarUrlController,
+                  decoration: const InputDecoration(
+                    hintText: 'https://res.cloudinary.com/.../avatar.jpg',
+                    prefixIcon: Icon(Icons.link, size: 18),
+                    isDense: true,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                Text('URL ảnh bìa', style: TextStyle(fontSize: 12, color: subColor)),
+                const SizedBox(height: 4),
+                TextFormField(
+                  controller: _bannerUrlController,
+                  decoration: const InputDecoration(
+                    hintText: 'https://res.cloudinary.com/.../banner.jpg',
+                    prefixIcon: Icon(Icons.link, size: 18),
+                    isDense: true,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
 
           // Save Button
           Align(
@@ -453,7 +694,7 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
               icon: auth.isLoading
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.save_outlined, size: 18),
-              label: const Text('Lưu thay đổi'),
+              label: const Text('Lưu thay đổi hồ sơ'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
