@@ -327,6 +327,39 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
                       },
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  // Sort By Selector Row (FR-02)
+                  Row(
+                    children: [
+                      const Icon(Icons.sort, size: 16, color: AppTheme.textSecondary),
+                      const SizedBox(width: 6),
+                      const Text(
+                        'Sắp xếp:',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(width: 8),
+                      _SortChip(
+                        label: 'Phổ biến',
+                        value: 'popular',
+                        groupValue: fandomProvider.sortBy,
+                        onSelected: (val) => fandomProvider.setSortBy(val),
+                      ),
+                      const SizedBox(width: 6),
+                      _SortChip(
+                        label: 'Mới nhất',
+                        value: 'newest',
+                        groupValue: fandomProvider.sortBy,
+                        onSelected: (val) => fandomProvider.setSortBy(val),
+                      ),
+                      const SizedBox(width: 6),
+                      _SortChip(
+                        label: 'A - Z',
+                        value: 'name_asc',
+                        groupValue: fandomProvider.sortBy,
+                        onSelected: (val) => fandomProvider.setSortBy(val),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -356,7 +389,7 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
                               padding: const EdgeInsets.all(16),
                               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: isWide ? 3 : 1,
-                                childAspectRatio: isWide ? 1.2 : 1.7,
+                                childAspectRatio: isWide ? 1.15 : 1.6,
                                 crossAxisSpacing: 16,
                                 mainAxisSpacing: 16,
                               ),
@@ -376,6 +409,48 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
   }
 }
 
+class _SortChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final String groupValue;
+  final ValueChanged<String> onSelected;
+
+  const _SortChip({
+    required this.label,
+    required this.value,
+    required this.groupValue,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isSelected = value == groupValue;
+    return InkWell(
+      onTap: () => onSelected(value),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? AppTheme.primary.withValues(alpha: 0.25) : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? AppTheme.primary : AppTheme.surfaceLight,
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FandomCard extends StatelessWidget {
   final FandomSummaryModel fandom;
   const _FandomCard({required this.fandom});
@@ -384,6 +459,8 @@ class _FandomCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       clipBehavior: Clip.antiAlias,
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: InkWell(
         onTap: () {
           context.push('/fandoms/${fandom.slug}');
@@ -391,30 +468,40 @@ class _FandomCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Banner Header
-            Container(
-              height: 70,
+            // Banner Header (Cloudinary Real Asset with Fallback)
+            SizedBox(
+              height: 85,
               width: double.infinity,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    AppTheme.primary.withValues(alpha: 0.8),
-                    AppTheme.accent.withValues(alpha: 0.8),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
               child: Stack(
+                fit: StackFit.expand,
                 children: [
+                  if (fandom.bannerUrl != null && fandom.bannerUrl!.isNotEmpty)
+                    Image.network(
+                      fandom.bannerUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => _defaultBanner(),
+                    )
+                  else
+                    _defaultBanner(),
+                  // Top Gradient for Badge Readability
+                  Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.black54, Colors.transparent],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                  ),
                   Positioned(
                     top: 8,
                     right: 8,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: Colors.black54,
+                        color: Colors.black.withValues(alpha: 0.65),
                         borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white24, width: 0.5),
                       ),
                       child: Text(
                         fandom.category,
@@ -422,11 +509,31 @@ class _FandomCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (fandom.admissionMode == 'APPROVAL')
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accent.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline, size: 11, color: Colors.white),
+                            SizedBox(width: 3),
+                            Text('Cần duyệt', style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
 
-            // Card Body
+            // Card Body with Real Cloudinary Avatar
             Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -434,13 +541,22 @@ class _FandomCard extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 20,
-                        backgroundColor: AppTheme.primary,
-                        child: Text(
-                          fandom.name.isNotEmpty ? fandom.name[0].toUpperCase() : 'F',
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppTheme.surfaceLight, width: 2),
+                          color: AppTheme.primary,
                         ),
+                        clipBehavior: Clip.antiAlias,
+                        child: (fandom.avatarUrl != null && fandom.avatarUrl!.isNotEmpty)
+                            ? Image.network(
+                                fandom.avatarUrl!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => _avatarFallback(),
+                              )
+                            : _avatarFallback(),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -449,7 +565,7 @@ class _FandomCard extends StatelessWidget {
                           children: [
                             Text(
                               fandom.name,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -468,7 +584,7 @@ class _FandomCard extends StatelessWidget {
                       fandom.description!,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.4),
                     ),
                   const SizedBox(height: 10),
                   Row(
@@ -476,7 +592,7 @@ class _FandomCard extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.people_alt_outlined, size: 16, color: AppTheme.textSecondary),
+                          const Icon(Icons.people_alt_outlined, size: 15, color: AppTheme.textSecondary),
                           const SizedBox(width: 4),
                           Text(
                             '${fandom.memberCount} thành viên',
@@ -485,7 +601,7 @@ class _FandomCard extends StatelessWidget {
                         ],
                       ),
                       const Text(
-                        'Khám phá →',
+                        'Xem hồ sơ →',
                         style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold, fontSize: 12),
                       ),
                     ],
@@ -495,6 +611,30 @@ class _FandomCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _defaultBanner() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.primary.withValues(alpha: 0.8),
+            AppTheme.accent.withValues(alpha: 0.8),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+    );
+  }
+
+  Widget _avatarFallback() {
+    return Center(
+      child: Text(
+        fandom.name.isNotEmpty ? fandom.name[0].toUpperCase() : 'F',
+        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18),
       ),
     );
   }

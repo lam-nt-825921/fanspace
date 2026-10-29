@@ -55,6 +55,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://fanspace:fanspace_password@postgres:5432/fanspace_db
       - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend/app:/app/app
     ports:
       - "8000:8000"
     depends_on:
