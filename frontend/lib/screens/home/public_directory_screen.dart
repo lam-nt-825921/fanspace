@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/fandom_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/fandom_provider.dart';
-import '../auth/login_screen.dart';
 import '../auth/widgets/theme_toggle_button.dart';
 import '../auth/widgets/active_sessions_dialog.dart';
 import '../auth/widgets/email_otp_dialog.dart';
 import '../auth/widgets/oauth_set_password_dialog.dart';
-import 'create_fandom_screen.dart';
-import 'fandom_detail_screen.dart';
+import '../profile/user_settings_dialog.dart';
+
 
 class PublicDirectoryScreen extends StatefulWidget {
   const PublicDirectoryScreen({super.key});
@@ -84,7 +84,11 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
             // User Avatar Menu
             PopupMenuButton<String>(
               onSelected: (value) {
-                if (value == 'logout') {
+                if (value == 'settings') {
+                  UserSettingsDialog.show(context);
+                } else if (value == 'admin_portal') {
+                  context.push('/admin/permissions');
+                } else if (value == 'logout') {
                   auth.logout();
                 } else if (value == 'sessions') {
                   ActiveSessionsDialog.show(context);
@@ -129,6 +133,27 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
                         const SizedBox(height: 4),
                         const Text('⚠️ Chưa xác thực email', style: TextStyle(color: AppTheme.warning, fontSize: 11)),
                       ],
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'settings',
+                  child: Row(
+                    children: [
+                      Icon(Icons.manage_accounts_outlined, color: AppTheme.primary, size: 18),
+                      SizedBox(width: 8),
+                      Text('Cài đặt & Hồ sơ cá nhân', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'admin_portal',
+                  child: Row(
+                    children: [
+                      Icon(Icons.admin_panel_settings_outlined, color: Color(0xFF2563EB), size: 18),
+                      SizedBox(width: 8),
+                      Text('Bảng Phân Quyền Admin'),
                     ],
                   ),
                 ),
@@ -202,9 +227,14 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
               ),
             ),
           ] else ...[
+            IconButton(
+              tooltip: 'Cổng Quản trị Admin',
+              icon: const Icon(Icons.shield_outlined, color: Color(0xFF2563EB)),
+              onPressed: () => context.push('/admin/login'),
+            ),
             TextButton.icon(
               onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+                context.go('/login');
               },
               icon: const Icon(Icons.login, color: AppTheme.primary),
               label: const Text('Đăng nhập', style: TextStyle(color: AppTheme.primary)),
@@ -225,13 +255,10 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Vui lòng đăng nhập để tạo không gian Fandom mới!')),
             );
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+            context.go('/login');
             return;
           }
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const CreateFandomScreen()),
-          );
+          context.push('/fandoms/create');
         },
         icon: const Icon(Icons.add),
         label: const Text('Tạo Fandom mới', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -359,12 +386,7 @@ class _FandomCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => FandomDetailScreen(slug: fandom.slug),
-            ),
-          );
+          context.push('/fandoms/${fandom.slug}');
         },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

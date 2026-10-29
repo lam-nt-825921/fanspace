@@ -8,7 +8,9 @@ device session management, and account soft deletion.
 import urllib.parse
 import uuid
 import httpx
+import orjson
 from fastapi import APIRouter, Depends, status, Request, BackgroundTasks, HTTPException
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
@@ -25,6 +27,7 @@ from app.modules.identity.schemas import (
     Token,
     UserOut,
     RefreshTokenRequest,
+    OAuthTicketExchangeRequest,
     EmailSendOTPRequest,
     EmailVerifyOTPRequest,
     OAuthSetPasswordRequest,
@@ -35,7 +38,10 @@ from app.modules.identity.schemas import (
     OTPSendResponse,
     GoogleAuthUrlResponse,
     RevokeAllSessionsResponse,
+    UserUpdateProfile,
+    PasswordChangeRequest,
 )
+from app.core.security import get_password_hash, verify_password
 from app.modules.identity.service import (
     IdentityService,
     get_current_user,
@@ -173,12 +179,11 @@ async def google_login(
 
 @auth_router.get(
     "/google/login",
-    response_model=GoogleAuthUrlResponse,
-    summary="Lấy URL đăng nhập Google OAuth2 (Web Redirect)",
-    description="Tạo đường dẫn cấp quyền của Google OAuth2 cho trình duyệt Web hoặc Desktop.",
+    summary="Khởi tạo cổng ủy quyền Google OAuth2",
+    description="Chuyển hướng trình duyệt tới Google Consent Screen (307 Redirect) hoặc trả về JSON URL.",
 )
-async def google_login_url():
-    """Generates the Google OAuth2 consent screen authorization URL."""
+async def google_login_url(request: Request):
+    """Generates the Google OAuth2 consent screen authorization URL and redirects."""
     if not settings.GOOGLE_CLIENT_ID:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -193,7 +198,12 @@ async def google_login_url():
         "prompt": "select_account",
     }
     auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
-    return GoogleAuthUrlResponse(url=auth_url)
+
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept and "text/html" not in accept:
+        return GoogleAuthUrlResponse(url=auth_url)
+
+    return RedirectResponse(url=auth_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
 @auth_router.get(
@@ -206,8 +216,12 @@ async def google_oauth_callback(
     code: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """Exchanges an authorization code with Google for tokens and logs the user in."""
+    accept = request.headers.get("accept", "")
+    is_browser = "text/html" in accept
+
     token_url = "https://oauth2.googleapis.com/token"
     async with httpx.AsyncClient() as client:
         res = await client.post(
@@ -221,9 +235,14 @@ async def google_oauth_callback(
             },
         )
         if res.status_code != 200:
+            error_detail = f"Lỗi trao đổi mã ủy quyền với Google: {res.text}"
+            if is_browser:
+                return RedirectResponse(
+                    url=f"http://localhost:3000/auth/callback?error={urllib.parse.quote(error_detail)}"
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Lỗi trao đổi mã ủy quyền với Google: {res.text}",
+                detail=error_detail,
             )
         token_data = res.json()
         id_token_val = token_data.get("id_token")
@@ -232,11 +251,59 @@ async def google_oauth_callback(
     user, tokens = await IdentityService.google_login(
         db, GoogleLogin(id_token=id_token_val), client_info
     )
+
+    if is_browser:
+        # Secure OAuth2 One-Time Exchange Ticket (TTL 60s in Redis)
+        ticket = str(uuid.uuid4())
+        ticket_data = {
+            "tokens": tokens.model_dump(mode="json"),
+            "user": to_user_out(user).model_dump(mode="json"),
+        }
+        await redis.setex(f"oauth_ticket:{ticket}", 60, orjson.dumps(ticket_data).decode("utf-8"))
+        redirect_url = f"http://localhost:3000/auth/callback?ticket={ticket}"
+        return RedirectResponse(url=redirect_url)
+
     return AuthResponse(
         success=True,
         message="Xác thực Google OAuth2 thành công.",
         tokens=tokens,
         user=to_user_out(user),
+    )
+
+
+@auth_router.post(
+    "/exchange-ticket",
+    response_model=AuthResponse,
+    summary="Đổi mã vé OAuth tạm thời (Ticket) lấy JWT Tokens",
+    description="""
+    Đổi mã vé dùng 1 lần (Single-use ticket) nhận được từ OAuth Callback lấy cặp JWT access và refresh tokens:
+    - **Bảo mật**: Mã vé được lưu trong Redis với TTL 60 giây và bị xóa ngay lập tức sau khi đổi (Zero token in URL).
+    """,
+    responses={
+        400: {"description": "Mã vé không hợp lệ hoặc đã hết hạn (quá 60 giây)"},
+    },
+)
+async def exchange_oauth_ticket(
+    data: OAuthTicketExchangeRequest,
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Validates and exchanges a single-use OAuth ticket for user session tokens."""
+    ticket_key = f"oauth_ticket:{data.ticket}"
+    raw_data = await redis.get(ticket_key)
+    if not raw_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mã vé xác thực không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.",
+        )
+    # Immediately delete to enforce single-use protection
+    await redis.delete(ticket_key)
+
+    payload = orjson.loads(raw_data)
+    return AuthResponse(
+        success=True,
+        message="Đăng nhập Google thành công.",
+        tokens=Token(**payload["tokens"]),
+        user=UserOut(**payload["user"]),
     )
 
 
@@ -459,3 +526,50 @@ async def delete_account(
 async def get_me(current_user: User = Depends(get_current_user)):
     """Returns the profile of the currently authenticated user."""
     return to_user_out(current_user)
+
+
+@users_router.put(
+    "/me",
+    response_model=UserOut,
+    summary="Cập nhật hồ sơ tài khoản cá nhân",
+    description="Cập nhật tên hiển thị, ảnh đại diện hoặc tiểu sử bản thân.",
+)
+async def update_me(
+    data: UserUpdateProfile,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Updates profile properties for the currently authenticated user."""
+    if data.display_name is not None:
+        current_user.display_name = data.display_name.strip()
+    if data.avatar_url is not None:
+        current_user.avatar_url = data.avatar_url.strip() if data.avatar_url.strip() else None
+    if data.bio is not None:
+        current_user.bio = data.bio.strip() if data.bio.strip() else None
+
+    await db.commit()
+    await db.refresh(current_user)
+    return to_user_out(current_user)
+
+
+@auth_router.post(
+    "/password/change",
+    response_model=MessageResponse,
+    summary="Đổi mật khẩu tài khoản",
+    description="Xác thực mật khẩu cũ và cập nhật mật khẩu mới mã hóa chuẩn Argon2id.",
+)
+async def change_password(
+    data: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Changes password for an authenticated user with verification of current password."""
+    if not current_user.password_hash or not verify_password(data.old_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mật khẩu hiện tại không chính xác.",
+        )
+    current_user.password_hash = get_password_hash(data.new_password)
+    await db.commit()
+    return MessageResponse(success=True, message="Đổi mật khẩu thành công.")
+

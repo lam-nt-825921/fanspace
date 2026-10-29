@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/url_navigation.dart';
 import '../../providers/auth_provider.dart';
-import 'register_screen.dart';
 import 'widgets/theme_toggle_button.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -54,26 +56,17 @@ class _LoginScreenState extends State<LoginScreen> {
           behavior: SnackBarBehavior.floating,
         ),
       );
-      // Auto navigation is handled reactively by AuthGuard in main.dart
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/');
       }
     }
   }
 
-  Future<void> _handleGoogleSignIn() async {
-    final auth = context.read<AuthProvider>();
-    // If running web, we can either trigger GIS or get auth redirect URL
-    final authUrl = await auth.getGoogleAuthUrl();
-    if (authUrl != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Đang khởi tạo cổng đăng nhập Google an toàn...'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      // In a real browser or web redirect, launchUrl(authUrl)
-    }
+  void _handleGoogleSignIn() {
+    final targetUrl = '${AppConstants.baseUrl}/api/v1/auth/google/login';
+    openExternalUrlSync(targetUrl);
   }
 
   String _formatLockout(int seconds) {
@@ -97,12 +90,16 @@ class _LoginScreenState extends State<LoginScreen> {
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          leading: Navigator.of(context).canPop()
-              ? IconButton(
-                  icon: Icon(Icons.arrow_back_ios_new_rounded, color: textColor, size: 20),
-                  onPressed: () => Navigator.of(context).pop(),
-                )
-              : null,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back_ios_new_rounded, color: textColor, size: 20),
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/');
+              }
+            },
+          ),
           actions: const [
             Padding(
               padding: EdgeInsets.only(right: 16),
@@ -359,9 +356,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             TextButton(
                               onPressed: () {
-                                Navigator.of(context).pushReplacement(
-                                  MaterialPageRoute(builder: (_) => const RegisterScreen()),
-                                );
+                                context.go('/register');
                               },
                               child: const Text(
                                 'Đăng ký ngay',

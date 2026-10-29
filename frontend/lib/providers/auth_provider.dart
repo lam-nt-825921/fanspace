@@ -39,10 +39,50 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setErrorMessage(String message) {
+    _errorMessage = message;
+    notifyListeners();
+  }
+
   Future<void> initialize() async {
     final token = await _apiClient.getAccessToken();
     if (token != null && token.isNotEmpty) {
       await fetchMe();
+    }
+  }
+
+  /// Trao đổi One-time OAuth Ticket lấy JWT tokens bảo mật (OWASP / OAuth 2.1)
+  Future<bool> exchangeOAuthTicket(String ticket) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/auth/exchange-ticket',
+        data: {'ticket': ticket.trim()},
+      );
+      final tokens = response.data['tokens'];
+      await _apiClient.saveTokens(
+        accessToken: tokens['access_token'],
+        refreshToken: tokens['refresh_token'],
+      );
+
+      _currentUser = UserModel.fromJson(response.data['user']);
+      _successMessage = response.data['message'] ?? 'Đăng nhập Google thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Phiên đăng nhập Google đã hết hạn hoặc không hợp lệ.');
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      notifyListeners();
+      return false;
     }
   }
 
@@ -179,11 +219,20 @@ class AuthProvider extends ChangeNotifier {
 
   /// 4. Lấy URL ủy quyền Google OAuth2 cho Web/Desktop
   Future<String?> getGoogleAuthUrl() async {
+    _setLoading(true);
+    _errorMessage = null;
     try {
       final response = await _apiClient.dio.get('/api/v1/auth/google/login');
+      _setLoading(false);
       return response.data['url'];
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Không thể lấy URL đăng nhập Google.');
+      _setLoading(false);
+      notifyListeners();
+      return null;
     } catch (e) {
       _errorMessage = 'Không thể lấy URL đăng nhập Google: $e';
+      _setLoading(false);
       notifyListeners();
       return null;
     }
@@ -302,6 +351,75 @@ class AuthProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {}
+  }
+
+  /// Cập nhật hồ sơ cá nhân (Tên hiển thị, avatar, bio)
+  Future<bool> updateProfile({
+    String? displayName,
+    String? avatarUrl,
+    String? bio,
+  }) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final payload = <String, dynamic>{};
+      if (displayName != null) payload['display_name'] = displayName.trim();
+      if (avatarUrl != null) payload['avatar_url'] = avatarUrl.trim();
+      if (bio != null) payload['bio'] = bio.trim();
+
+      final response = await _apiClient.dio.put('/api/v1/users/me', data: payload);
+      _currentUser = UserModel.fromJson(response.data);
+      _successMessage = 'Cập nhật hồ sơ thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Cập nhật hồ sơ không thành công.');
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Đổi mật khẩu tài khoản
+  Future<bool> changePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/auth/password/change',
+        data: {
+          'old_password': oldPassword,
+          'new_password': newPassword,
+        },
+      );
+      _successMessage = response.data['message'] ?? 'Đổi mật khẩu thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Đổi mật khẩu không thành công.');
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    }
   }
 
   /// 9. Lấy danh sách các phiên thiết bị đang hoạt động

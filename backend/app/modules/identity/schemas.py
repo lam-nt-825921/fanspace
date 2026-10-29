@@ -123,6 +123,11 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(..., description="Refresh token đang hoạt động")
 
 
+class OAuthTicketExchangeRequest(BaseModel):
+    """Payload to exchange a single-use short-lived OAuth ticket for authentication tokens."""
+    ticket: str = Field(..., description="Mã vé tạm thời dùng 1 lần (TTL 60s) nhận được từ OAuth redirect callback")
+
+
 class EmailSendOTPRequest(BaseModel):
     """Payload to request an OTP code via email."""
     email: EmailStr = Field(..., description="Email nhận mã xác thực", examples=["fan@example.com"])
@@ -226,3 +231,17 @@ class RevokeAllSessionsResponse(BaseModel):
     success: bool = Field(default=True, description="Trạng thái thu hồi")
     message: str = Field(..., description="Thông báo kết quả")
     revoked_count: int = Field(..., description="Số lượng phiên đăng nhập khác đã bị thu hồi")
+
+
+class UserUpdateProfile(BaseModel):
+    """Payload for updating public profile information."""
+    display_name: str | None = Field(None, min_length=1, max_length=100, description="Tên hiển thị mới")
+    avatar_url: str | None = Field(None, max_length=500, description="URL ảnh đại diện mới")
+    bio: str | None = Field(None, max_length=500, description="Tiểu sử tóm tắt")
+
+
+class PasswordChangeRequest(BaseModel):
+    """Payload for changing current account password."""
+    old_password: str = Field(..., min_length=6, max_length=100, description="Mật khẩu hiện tại")
+    new_password: str = Field(..., min_length=6, max_length=100, description="Mật khẩu mới muốn đổi")
+
