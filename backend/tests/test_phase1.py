@@ -2,7 +2,6 @@ import pytest
 import uuid
 from httpx import ASGITransport, AsyncClient
 from app.main import app
-from app.core.database import init_db
 
 
 @pytest.mark.asyncio
@@ -14,7 +13,7 @@ async def test_auth_register_and_login():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Register
+        # 1. Stage Registration & Verify OTP
         reg_res = await client.post(
             "/api/v1/auth/register",
             json={
@@ -24,12 +23,18 @@ async def test_auth_register_and_login():
                 "display_name": "Sky Fan 01",
             },
         )
-        assert reg_res.status_code == 201
-        reg_data = reg_res.json()
-        assert reg_data["success"] is True
-        assert "tokens" in reg_data
-        assert "access_token" in reg_data["tokens"]
-        access_token = reg_data["tokens"]["access_token"]
+        assert reg_res.status_code == 202
+        otp_code = reg_res.json()["dev_otp"]
+
+        verify_res = await client.post(
+            "/api/v1/auth/email/verify-otp",
+            json={"email": email, "code": otp_code, "purpose": "VERIFY_EMAIL"},
+        )
+        assert verify_res.status_code == 200
+        verify_data = verify_res.json()
+        assert verify_data["success"] is True
+        assert "tokens" in verify_data
+        assert "access_token" in verify_data["tokens"]
 
         # 2. Duplicate register fails
         dup_res = await client.post(
@@ -85,21 +90,29 @@ async def test_dev_login_endpoint_removed():
 async def test_fandom_creation_and_discovery():
     unique_id = uuid.uuid4().hex[:8]
     slug = f"son-tung-{unique_id}"
+    owner_email = f"owner_{unique_id}@example.com"
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Register a real owner user
+        # 1. Register and verify a real owner user
         reg_res = await client.post(
             "/api/v1/auth/register",
             json={
-                "email": f"owner_{unique_id}@example.com",
+                "email": owner_email,
                 "username": f"owner_{unique_id}",
                 "password": "StrongPassword123!",
                 "display_name": f"Owner {unique_id}",
             },
         )
-        assert reg_res.status_code == 201
-        token = reg_res.json()["tokens"]["access_token"]
+        assert reg_res.status_code == 202
+        otp_code = reg_res.json()["dev_otp"]
+
+        verify_res = await client.post(
+            "/api/v1/auth/email/verify-otp",
+            json={"email": owner_email, "code": otp_code, "purpose": "VERIFY_EMAIL"},
+        )
+        assert verify_res.status_code == 200
+        token = verify_res.json()["tokens"]["access_token"]
 
         # 2. Create Fandom
         create_res = await client.post(

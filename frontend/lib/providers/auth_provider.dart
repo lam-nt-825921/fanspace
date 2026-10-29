@@ -86,7 +86,7 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// 1. Đăng ký tài khoản người dùng mới
+  /// 1. Khởi tạo yêu cầu đăng ký tài khoản (lưu tạm Redis 10 phút & gửi OTP về Email)
   Future<bool> register({
     required String email,
     required String username,
@@ -108,14 +108,7 @@ class AuthProvider extends ChangeNotifier {
       };
 
       final response = await _apiClient.dio.post('/api/v1/auth/register', data: payload);
-      final tokens = response.data['tokens'];
-      await _apiClient.saveTokens(
-        accessToken: tokens['access_token'],
-        refreshToken: tokens['refresh_token'],
-      );
-
-      _currentUser = UserModel.fromJson(response.data['user']);
-      _successMessage = response.data['message'] ?? 'Đăng ký tài khoản thành công.';
+      _successMessage = response.data['message'] ?? 'Mã OTP xác thực đã được gửi tới email của bạn.';
       _setLoading(false);
       notifyListeners();
       return true;
@@ -129,6 +122,7 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
+
 
   /// 2. Đăng nhập bằng Email/Password
   Future<bool> login({
@@ -181,8 +175,8 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// 3. Đăng nhập / Đăng ký qua Google OAuth ID Token
-  Future<bool> googleLogin({required String idToken}) async {
+  /// 3. Đăng nhập hoặc đăng ký qua Google OAuth ID Token
+  Future<bool> googleLogin({required String idToken, String? password}) async {
     _setLoading(true);
     _errorMessage = null;
     _successMessage = null;
@@ -191,6 +185,7 @@ class AuthProvider extends ChangeNotifier {
       final clientInfo = await ClientDetector.getClientInfo();
       final payload = {
         'id_token': idToken,
+        if (password != null && password.isNotEmpty) 'password': password,
         ...clientInfo.toJson(),
       };
 
@@ -216,6 +211,36 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  /// 3b. Liên kết tài khoản hiện tại với Google OAuth
+  Future<bool> linkGoogleAccount({required String idToken}) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/auth/google/link',
+        data: {'id_token': idToken},
+      );
+      _currentUser = UserModel.fromJson(response.data);
+      _successMessage = 'Liên kết tài khoản Google thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Liên kết tài khoản Google thất bại.');
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    }
+  }
+
 
   /// 4. Lấy URL ủy quyền Google OAuth2 cho Web/Desktop
   Future<String?> getGoogleAuthUrl() async {
@@ -268,7 +293,7 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// 6. Xác thực mã OTP
+  /// 6. Xác thực mã OTP (và chính thức tạo tài khoản + lưu token nếu purpose == VERIFY_EMAIL)
   Future<bool> verifyEmailOtp({
     required String email,
     required String code,
@@ -285,11 +310,19 @@ class AuthProvider extends ChangeNotifier {
         'purpose': purpose,
       });
 
-      if (purpose == 'VERIFY_EMAIL' && _currentUser != null) {
+      final data = response.data;
+      if (data['tokens'] != null && data['user'] != null) {
+        final tokens = data['tokens'];
+        await _apiClient.saveTokens(
+          accessToken: tokens['access_token'],
+          refreshToken: tokens['refresh_token'],
+        );
+        _currentUser = UserModel.fromJson(data['user']);
+      } else if (purpose == 'VERIFY_EMAIL' && _currentUser != null) {
         _currentUser = _currentUser!.copyWith(isEmailVerified: true);
       }
 
-      _successMessage = response.data['message'] ?? 'Xác thực OTP thành công.';
+      _successMessage = data['message'] ?? 'Xác thực OTP thành công.';
       _setLoading(false);
       notifyListeners();
       return true;
@@ -303,6 +336,7 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
+
 
   /// 7. Thiết lập mật khẩu cho tài khoản Google OAuth
   Future<bool> oauthSetPassword({

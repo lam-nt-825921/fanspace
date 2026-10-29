@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     DEBUG_OTP_IN_RESPONSE: bool = True
 
     # Security & Rate Limiting
+    PENDING_REGISTRATION_TTL_SECONDS: int = 600  # 10 minutes auto-cancel for unverified registration
     OTP_TTL_SECONDS: int = 300  # 5 minutes
     OTP_COOLDOWN_SECONDS: int = 60  # 1 minute
     OTP_MAX_ATTEMPTS: int = 5

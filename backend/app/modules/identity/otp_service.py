@@ -171,6 +171,25 @@ class OTPService:
 
         if data.get("code") != code.strip():
             data["attempts"] = attempts + 1
+            if data["attempts"] >= settings.OTP_MAX_ATTEMPTS:
+                await redis.delete(otp_key)
+                if purpose == OTPPurpose.VERIFY_EMAIL:
+                    pending_key = f"pending_reg:email:{clean_email}"
+                    raw_pending = await redis.get(pending_key)
+                    if raw_pending:
+                        try:
+                            pending_data = json.loads(raw_pending)
+                            old_uname = pending_data.get("username", "").lower()
+                            if old_uname:
+                                await redis.delete(f"pending_reg:username:{old_uname}")
+                        except Exception:
+                            pass
+                        await redis.delete(pending_key)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Bạn đã nhập sai mã OTP quá {settings.OTP_MAX_ATTEMPTS} lần. Yêu cầu đã bị hủy để bảo vệ an toàn. Vui lòng thực hiện lại.",
+                )
+
             remaining_ttl = await redis.ttl(otp_key)
             if remaining_ttl > 0:
                 await redis.set(otp_key, json.dumps(data), ex=remaining_ttl)

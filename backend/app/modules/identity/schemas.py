@@ -6,7 +6,7 @@ schemas, and typed Swagger response models for all authentication endpoints.
 
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 
 from app.modules.identity.otp_service import OTPPurpose
 
@@ -78,25 +78,16 @@ class UserLogin(BaseModel):
 
 class GoogleLogin(BaseModel):
     """Payload for Google OAuth2 authentication (Mobile/Web)."""
-    id_token: str | None = Field(
-        None,
+    id_token: str = Field(
+        ...,
+        min_length=10,
         description="Google JWT ID Token thu được từ Google Sign-In SDK",
         examples=["eyJhbGciOiJSUzI1NiIs..."],
     )
-    email: EmailStr | None = Field(
+    password: str | None = Field(
         None,
-        description="Email tài khoản Google (dùng trong môi trường kiểm thử hoặc fallback)",
-        examples=["user@gmail.com"],
-    )
-    display_name: str | None = Field(
-        None,
-        description="Tên hiển thị lấy từ hồ sơ Google",
-        examples=["Nguyễn Văn A"],
-    )
-    avatar_url: str | None = Field(
-        None,
-        description="Ảnh đại diện lấy từ tài khoản Google",
-        examples=["https://lh3.googleusercontent.com/a/photo.jpg"],
+        description="Mật khẩu xác thực của tài khoản hiện có (bắt buộc khi liên kết lần đầu với tài khoản Email/Mật khẩu trùng địa chỉ email)",
+        examples=["ExistingPassword123!"],
     )
     platform: str | None = Field(
         None,
@@ -107,6 +98,16 @@ class GoogleLogin(BaseModel):
         None,
         description="Mã định danh thiết bị (bắt buộc khi platform là 'MOBILE')",
         examples=["android_device_id_789"],
+    )
+
+
+class GoogleLinkRequest(BaseModel):
+    """Payload for an authenticated user to link their Google account."""
+    id_token: str = Field(
+        ...,
+        min_length=10,
+        description="Google JWT ID Token thu được từ Google Sign-In SDK",
+        examples=["eyJhbGciOiJSUzI1NiIs..."],
     )
 
 
@@ -149,7 +150,14 @@ class EmailVerifyOTPRequest(BaseModel):
 
 class OAuthSetPasswordRequest(BaseModel):
     """Payload to establish a password for a pure Google OAuth account."""
-    otp: str = Field(..., min_length=6, max_length=6, description="Mã OTP gửi về Gmail của tài khoản", examples=["123456"])
+    otp: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        validation_alias=AliasChoices("otp", "otp_code"),
+        description="Mã OTP gửi về Gmail của tài khoản",
+        examples=["123456"],
+    )
     new_password: str = Field(..., min_length=6, max_length=100, description="Mật khẩu mới muốn thiết lập")
 
 
@@ -204,8 +212,42 @@ class AuthResponse(BaseModel):
     """Standardized response schema for authentication and token generation."""
     success: bool = Field(default=True, description="Trạng thái thực thi")
     message: str | None = Field(default=None, description="Thông điệp phản hồi")
+    require_password_setup: bool = Field(
+        default=False,
+        description="Cờ báo hiệu tài khoản đăng ký qua mạng xã hội chưa thiết lập mật khẩu cá nhân",
+    )
     tokens: Token = Field(..., description="Cặp mã token truy cập và refresh")
     user: UserOut = Field(..., description="Dữ liệu hồ sơ người dùng")
+
+
+class RegisterInitResponse(BaseModel):
+    """Response returned when a registration request is staged in Redis pending OTP verification."""
+    success: bool = Field(default=True, description="Trạng thái ghi nhận yêu cầu đăng ký tạm thời")
+    require_otp: bool = Field(default=True, description="Cờ bắt buộc xác thực OTP để chính thức tạo tài khoản")
+    email: EmailStr = Field(..., description="Địa chỉ email nhận mã OTP xác thực")
+    expires_in_seconds: int = Field(
+        default=600,
+        description="Thời gian tồn tại tối đa của yêu cầu đăng ký tạm trước khi tự hủy (giây)",
+    )
+    message: str = Field(..., description="Thông báo hướng dẫn người dùng nhập mã OTP")
+    dev_otp: str | None = Field(
+        None,
+        description="Mã OTP hiển thị khi bật DEBUG phục vụ kiểm thử tự động",
+    )
+
+
+class OTPVerifyResponse(BaseModel):
+    """Response returned after verifying an OTP code (includes tokens & user when completing registration)."""
+    success: bool = Field(default=True, description="Trạng thái xác thực OTP")
+    message: str = Field(..., description="Nội dung thông báo kết quả")
+    tokens: Token | None = Field(
+        None,
+        description="Cặp JWT token cấp mới (chỉ có khi hoàn tất tạo tài khoản qua VERIFY_EMAIL)",
+    )
+    user: UserOut | None = Field(
+        None,
+        description="Thông tin tài khoản vừa được khởi tạo (chỉ có khi hoàn tất VERIFY_EMAIL)",
+    )
 
 
 class MessageResponse(BaseModel):
