@@ -175,8 +175,8 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// 3. Đăng nhập / Đăng ký qua Google OAuth ID Token
-  Future<bool> googleLogin({required String idToken}) async {
+  /// 3. Đăng nhập hoặc đăng ký qua Google OAuth ID Token
+  Future<bool> googleLogin({required String idToken, String? password}) async {
     _setLoading(true);
     _errorMessage = null;
     _successMessage = null;
@@ -185,6 +185,7 @@ class AuthProvider extends ChangeNotifier {
       final clientInfo = await ClientDetector.getClientInfo();
       final payload = {
         'id_token': idToken,
+        if (password != null && password.isNotEmpty) 'password': password,
         ...clientInfo.toJson(),
       };
 
@@ -210,6 +211,36 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  /// 3b. Liên kết tài khoản hiện tại với Google OAuth
+  Future<bool> linkGoogleAccount({required String idToken}) async {
+    _setLoading(true);
+    _errorMessage = null;
+    _successMessage = null;
+
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/auth/google/link',
+        data: {'id_token': idToken},
+      );
+      _currentUser = UserModel.fromJson(response.data);
+      _successMessage = 'Liên kết tài khoản Google thành công.';
+      _setLoading(false);
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _errorMessage = _extractErrorMessage(e, fallback: 'Liên kết tài khoản Google thất bại.');
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = 'Lỗi kết nối máy chủ: $e';
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    }
+  }
+
 
   /// 4. Lấy URL ủy quyền Google OAuth2 cho Web/Desktop
   Future<String?> getGoogleAuthUrl() async {

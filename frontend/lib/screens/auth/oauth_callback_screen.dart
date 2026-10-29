@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
+import 'widgets/oauth_set_password_dialog.dart';
 
 class OAuthCallbackScreen extends StatefulWidget {
   final String? ticket;
@@ -56,7 +57,16 @@ class _OAuthCallbackScreenState extends State<OAuthCallbackScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
-        context.go('/');
+        // Prompt the user to configure a password if the OAuth-provisioned account does not have one
+        if (auth.currentUser != null && !auth.currentUser!.hasPassword) {
+          await OAuthSetPasswordDialog.show(
+            context,
+            email: auth.currentUser!.email,
+          );
+        }
+        if (mounted) {
+          context.go('/');
+        }
       } else {
         final err = auth.errorMessage ?? 'Không thể xác thực đăng nhập Google.';
         ScaffoldMessenger.of(context).showSnackBar(

@@ -6,7 +6,7 @@ schemas, and typed Swagger response models for all authentication endpoints.
 
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 
 from app.modules.identity.otp_service import OTPPurpose
 
@@ -81,8 +81,13 @@ class GoogleLogin(BaseModel):
     id_token: str = Field(
         ...,
         min_length=10,
-        description="Google JWT ID Token thu được từ Google Sign-In SDK (bắt buộc xác thực chữ ký với Google)",
+        description="Google JWT ID Token thu được từ Google Sign-In SDK",
         examples=["eyJhbGciOiJSUzI1NiIs..."],
+    )
+    password: str | None = Field(
+        None,
+        description="Mật khẩu xác thực của tài khoản hiện có (bắt buộc khi liên kết lần đầu với tài khoản Email/Mật khẩu trùng địa chỉ email)",
+        examples=["ExistingPassword123!"],
     )
     platform: str | None = Field(
         None,
@@ -93,6 +98,16 @@ class GoogleLogin(BaseModel):
         None,
         description="Mã định danh thiết bị (bắt buộc khi platform là 'MOBILE')",
         examples=["android_device_id_789"],
+    )
+
+
+class GoogleLinkRequest(BaseModel):
+    """Payload for an authenticated user to link their Google account."""
+    id_token: str = Field(
+        ...,
+        min_length=10,
+        description="Google JWT ID Token thu được từ Google Sign-In SDK",
+        examples=["eyJhbGciOiJSUzI1NiIs..."],
     )
 
 
@@ -135,7 +150,14 @@ class EmailVerifyOTPRequest(BaseModel):
 
 class OAuthSetPasswordRequest(BaseModel):
     """Payload to establish a password for a pure Google OAuth account."""
-    otp: str = Field(..., min_length=6, max_length=6, description="Mã OTP gửi về Gmail của tài khoản", examples=["123456"])
+    otp: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        validation_alias=AliasChoices("otp", "otp_code"),
+        description="Mã OTP gửi về Gmail của tài khoản",
+        examples=["123456"],
+    )
     new_password: str = Field(..., min_length=6, max_length=100, description="Mật khẩu mới muốn thiết lập")
 
 
@@ -190,6 +212,10 @@ class AuthResponse(BaseModel):
     """Standardized response schema for authentication and token generation."""
     success: bool = Field(default=True, description="Trạng thái thực thi")
     message: str | None = Field(default=None, description="Thông điệp phản hồi")
+    require_password_setup: bool = Field(
+        default=False,
+        description="Cờ báo hiệu tài khoản đăng ký qua mạng xã hội chưa thiết lập mật khẩu cá nhân",
+    )
     tokens: Token = Field(..., description="Cặp mã token truy cập và refresh")
     user: UserOut = Field(..., description="Dữ liệu hồ sơ người dùng")
 

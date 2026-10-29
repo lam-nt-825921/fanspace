@@ -24,6 +24,7 @@ from app.modules.identity.schemas import (
     UserRegister,
     UserLogin,
     GoogleLogin,
+    GoogleLinkRequest,
     Token,
     UserOut,
     RefreshTokenRequest,
@@ -157,30 +158,58 @@ async def login(
     response_model=AuthResponse,
     summary="Đăng nhập qua Google OAuth2 (ID Token)",
     description="""
-    Đăng nhập hoặc đăng ký nhanh thông qua Google ID Token:
-    - **Xác thực chữ ký số**: Kiểm tra tính hợp lệ của token với máy chủ Google và Client ID.
-    - **Tự động liên kết (Auto-link)**: Nếu email Google đã tồn tại trong hệ thống, tự động liên kết `google_id`.
-    - **Tạo tài khoản mới**: Nếu chưa tồn tại, tự động tạo tài khoản với role `USER`, ví 0 xu, `is_email_verified = True`.
+    Xác thực người dùng hoặc khởi tạo tài khoản mới thông qua Google ID Token:
+    - **Xác thực chữ ký số**: Kiểm tra tính hợp lệ của token với máy chủ Google và Client ID cấu hình.
+    - **Liên kết tài khoản trùng email**: Nếu email Google trùng với tài khoản Email/Mật khẩu hiện có chưa liên kết Google, yêu cầu xác minh `password` trước khi liên kết (trả về `409 Conflict` nếu chưa cung cấp mật khẩu).
+    - **Khởi tạo tài khoản mới**: Nếu email chưa tồn tại trên hệ thống, tự động khởi tạo tài khoản với `has_password = False` và trả về cờ `require_password_setup = True`.
     """,
     responses={
-        400: {"description": "Thiếu thông tin Google ID token hoặc email"},
-        401: {"description": "Google ID token không hợp lệ hoặc đã hết hạn"},
+        400: {"description": "Thiếu thông tin thiết bị hoặc tài khoản đã liên kết với định danh Google khác"},
+        401: {"description": "Google ID token không hợp lệ hoặc mật khẩu xác nhận liên kết không chính xác"},
+        409: {"description": "Email đã tồn tại nhưng chưa liên kết Google — yêu cầu xác nhận mật khẩu tài khoản hiện có"},
     },
 )
 async def google_login(
     data: GoogleLogin,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
-    """Processes Google OAuth authentication and auto-linking."""
+    """Processes Google OAuth authentication, password-verified account linking, and automatic user provisioning."""
     client_info = extract_client_info(request, data.platform, data.device_id)
-    user, tokens = await IdentityService.google_login(db, data, client_info)
+    user, tokens = await IdentityService.google_login(db, data, client_info, redis)
+    user_out = to_user_out(user)
     return AuthResponse(
         success=True,
         message="Đăng nhập qua Google thành công.",
+        require_password_setup=not user_out.has_password,
         tokens=tokens,
-        user=to_user_out(user),
+        user=user_out,
     )
+
+
+@auth_router.post(
+    "/google/link",
+    response_model=UserOut,
+    summary="Liên kết tài khoản hiện tại với Google",
+    description="""
+    Liên kết tài khoản đang đăng nhập với định danh Google OAuth2:
+    - **Xác thực Google ID Token**: Kiểm tra chữ ký số RSA và trạng thái `email_verified` với Google.
+    - **Kiểm tra trùng khớp**: Email trên tài khoản Google phải trùng khớp với email của tài khoản hiện tại và chưa được liên kết với tài khoản khác.
+    """,
+    responses={
+        400: {"description": "Tài khoản đã liên kết Google hoặc email Google không trùng khớp"},
+        401: {"description": "Chưa xác thực phiên đăng nhập hoặc Google ID token không hợp lệ"},
+    },
+)
+async def link_google_account(
+    data: GoogleLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Links a verified Google account to the currently authenticated user profile."""
+    updated_user = await IdentityService.link_google_account(db, current_user, data)
+    return to_user_out(updated_user)
 
 
 @auth_router.get(
@@ -264,16 +293,24 @@ async def google_oauth_callback(
             )
 
     client_info = extract_client_info(request)
-    user, tokens = await IdentityService.google_login(
-        db, GoogleLogin(id_token=id_token_val), client_info
-    )
+    try:
+        user, tokens = await IdentityService.google_login(
+            db, GoogleLogin(id_token=id_token_val), client_info, redis
+        )
+    except HTTPException as exc:
+        if is_browser:
+            return RedirectResponse(
+                url=f"http://localhost:3000/auth/callback?error={urllib.parse.quote(str(exc.detail))}"
+            )
+        raise exc
 
+    user_out = to_user_out(user)
     if is_browser:
         # Secure OAuth2 One-Time Exchange Ticket (TTL 60s in Redis)
         ticket = str(uuid.uuid4())
         ticket_data = {
             "tokens": tokens.model_dump(mode="json"),
-            "user": to_user_out(user).model_dump(mode="json"),
+            "user": user_out.model_dump(mode="json"),
         }
         await redis.setex(f"oauth_ticket:{ticket}", 60, orjson.dumps(ticket_data).decode("utf-8"))
         redirect_url = f"http://localhost:3000/auth/callback?ticket={ticket}"
@@ -282,8 +319,9 @@ async def google_oauth_callback(
     return AuthResponse(
         success=True,
         message="Xác thực Google OAuth2 thành công.",
+        require_password_setup=not user_out.has_password,
         tokens=tokens,
-        user=to_user_out(user),
+        user=user_out,
     )
 
 
@@ -315,12 +353,15 @@ async def exchange_oauth_ticket(
     await redis.delete(ticket_key)
 
     payload = orjson.loads(raw_data)
+    user_out = UserOut(**payload["user"])
     return AuthResponse(
         success=True,
         message="Đăng nhập Google thành công.",
+        require_password_setup=not user_out.has_password,
         tokens=Token(**payload["tokens"]),
-        user=UserOut(**payload["user"]),
+        user=user_out,
     )
+
 
 
 @auth_router.post(

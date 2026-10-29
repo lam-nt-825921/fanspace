@@ -1,21 +1,11 @@
-"""Unit & Integration Tests for Staged User Registration & OTP Verification (FR-01).
+"""Integration tests for staged user registration and OTP email verification.
 
 Covers:
-1. Valid 2-step registration cases:
-   - Step 1 (`POST /api/v1/auth/register`): Stages registration in Redis (10m TTL) and dispatches OTP email via SMTP.
-     Verifies NO User record exists in PostgreSQL before OTP verification.
-   - Step 2 (`POST /api/v1/auth/email/verify-otp`): Verifies 6-digit OTP, creates User (`is_email_verified=True`),
-     Wallet (`coin_balance=0`), and Session in PostgreSQL, and returns JWT tokens.
-   - Minimal required fields & full fields with `platform="MOBILE"` and `device_id`.
-2. Missing required fields (`email`, `username`, `password`, `display_name`, empty body, MOBILE without `device_id`).
-3. Invalid field formats & business constraints (malformed email, username length/regex, password length,
-   display_name length, duplicate email, duplicate username, reserved username in Redis & auto-release).
-4. Expiration, Anti-Brute-Force & Anti-Spam protections:
-   - Auto-cancellation when 10-minute staged registration TTL expires.
-   - Immediate cancellation of both OTP and staged registration after 5 wrong OTP attempts.
-   - Rejection of unrequested `/api/v1/auth/email/send-otp` calls for arbitrary emails.
-   - IP registration rate limit (max 5 per 10 minutes).
-5. Outgoing SMTP Email verification (both payload inspection and live Gmail SMTP TLS authentication check).
+- Two-step registration workflow (Redis staging + SMTP OTP dispatch -> PostgreSQL user provisioning).
+- Required field validation (`email`, `username`, `password`, `display_name`, and mobile `device_id`).
+- Field format validation, uniqueness checks, and temporary username reservation in Redis.
+- Staged registration TTL expiration, 5-attempt OTP brute-force cancellation, and IP rate limiting.
+- Outgoing SMTP payload verification and live Gmail SMTP TLS authentication.
 """
 
 import uuid
@@ -30,13 +20,13 @@ settings = get_settings()
 
 
 # ==============================================================================
-# 1. CASE ĐỦ TRƯỜNG HỢP LỆ & KIỂM CHỨNG CHƯA TẠO USER TRƯỚC KHI XÁC THỰC OTP
+# 1. STAGED REGISTRATION & OTP VERIFICATION WORKFLOW
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 async def test_register_staged_and_verified_minimal_fields(mock_smtp_send):
-    """Kiểm tra luồng chuẩn 2 bước: Gửi form đăng ký (chưa tạo User DB, có gửi mail OTP) -> Xác thực OTP mới tạo User."""
+    """Stages registration in Redis, dispatches an OTP email, and provisions the user only after OTP verification."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:8]
     email = f"valid_min_{uid}@example.com"
@@ -44,7 +34,7 @@ async def test_register_staged_and_verified_minimal_fields(mock_smtp_send):
     password = "ValidPassword123!"
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Bước 1: Gửi yêu cầu đăng ký -> Lưu tạm trên Redis & gửi OTP
+        # Step 1: Stage registration in Redis and dispatch OTP email
         reg_res = await client.post(
             "/api/v1/auth/register",
             json={
@@ -60,24 +50,24 @@ async def test_register_staged_and_verified_minimal_fields(mock_smtp_send):
         assert reg_data["require_otp"] is True
         assert reg_data["email"] == email
         assert reg_data["expires_in_seconds"] == settings.PENDING_REGISTRATION_TTL_SECONDS
-        assert "tokens" not in reg_data  # Chưa cấp token!
+        assert "tokens" not in reg_data
         otp_code = reg_data["dev_otp"]
         assert otp_code and len(otp_code) == 6
 
-        # Kiểm chứng: Hàm gửi email SMTP đã được gọi với đúng người nhận và chứa mã OTP 6 số
+        # Verify SMTP dispatch recipient and subject
         assert mock_smtp_send.called
         sent_msg = mock_smtp_send.call_args[0][0]
         assert sent_msg["To"] == email
         assert otp_code in sent_msg["Subject"]
 
-        # Kiểm chứng: Khi chưa xác thực OTP, tài khoản CHƯA tồn tại trong PostgreSQL (đăng nhập trả về 401)
+        # Verify user does not exist in PostgreSQL prior to OTP verification
         premature_login = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": password},
         )
         assert premature_login.status_code == 401
 
-        # Bước 2: Xác thực mã OTP -> Lúc này mới chính thức tạo User trong PostgreSQL và cấp JWT Token
+        # Step 2: Verify OTP to provision the User, Wallet, and Session in PostgreSQL
         verify_res = await client.post(
             "/api/v1/auth/email/verify-otp",
             json={"email": email, "code": otp_code, "purpose": "VERIFY_EMAIL"},
@@ -95,7 +85,7 @@ async def test_register_staged_and_verified_minimal_fields(mock_smtp_send):
         assert v_data["user"]["has_password"] is True
         assert v_data["user"]["is_google_linked"] is False
 
-        # Kiểm chứng: Key đăng ký tạm trên Redis đã được dọn sạch sau khi tạo tài khoản
+        # Verify temporary Redis keys are cleaned up after account creation
         r = get_redis_client()
         assert await r.get(f"pending_reg:email:{email}") is None
         assert await r.get(f"pending_reg:username:{username.lower()}") is None
@@ -103,7 +93,7 @@ async def test_register_staged_and_verified_minimal_fields(mock_smtp_send):
 
 @pytest.mark.asyncio
 async def test_register_staged_and_verified_full_mobile_fields():
-    """Đăng ký thành công khi truyền đầy đủ cả trường bắt buộc lẫn tùy chọn (platform='MOBILE' + device_id)."""
+    """Completes staged registration and OTP verification when optional mobile platform metadata is provided."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:8]
     email = f"valid_full_{uid}@example.com"
@@ -135,7 +125,7 @@ async def test_register_staged_and_verified_full_mobile_fields():
 
 
 # ==============================================================================
-# 2. CASE THIẾU TRƯỜNG (MISSING FIELDS)
+# 2. MISSING REQUIRED FIELDS
 # ==============================================================================
 
 
@@ -145,7 +135,7 @@ async def test_register_staged_and_verified_full_mobile_fields():
     ["email", "username", "password", "display_name"],
 )
 async def test_register_missing_each_required_field(missing_field: str):
-    """Bỏ trống từng trường bắt buộc (email, username, password, display_name) phải bị từ chối với 422."""
+    """Rejects registration requests missing any required field with 422 Unprocessable Entity."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     payload = {
@@ -165,7 +155,7 @@ async def test_register_missing_each_required_field(missing_field: str):
 
 @pytest.mark.asyncio
 async def test_register_empty_payload():
-    """Gửi body rỗng {} khi đăng ký phải bị từ chối với 422."""
+    """Rejects an empty registration payload with 422 Unprocessable Entity."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/api/v1/auth/register", json={})
@@ -175,7 +165,7 @@ async def test_register_empty_payload():
 
 @pytest.mark.asyncio
 async def test_register_mobile_missing_device_id():
-    """Đăng ký trên nền tảng MOBILE nhưng thiếu device_id phải bị từ chối với 400."""
+    """Rejects mobile registration requests that omit device_id with 400 Bad Request."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -194,7 +184,7 @@ async def test_register_mobile_missing_device_id():
 
 
 # ==============================================================================
-# 3. CASE SAI TRƯỜNG / SAI ĐỊNH DẠNG / TRÙNG LẶP / GIỮ CHỖ USERNAME
+# 3. FIELD FORMAT VALIDATION, UNIQUENESS & USERNAME RESERVATION
 # ==============================================================================
 
 
@@ -205,18 +195,18 @@ async def test_register_mobile_missing_device_id():
         ({"email": "not-an-email"}, "email"),
         ({"email": "@missing-local.com"}, "email"),
         ({"email": ""}, "email"),
-        ({"username": "ab"}, "username"),  # < 3 chars
-        ({"username": "a" * 51}, "username"),  # > 50 chars
-        ({"username": "bad space"}, "username"),  # contains whitespace
-        ({"username": "bad@char!"}, "username"),  # contains special chars outside [a-zA-Z0-9_-]
-        ({"password": "12345"}, "password"),  # < 6 chars
-        ({"password": "p" * 101}, "password"),  # > 100 chars
-        ({"display_name": ""}, "display_name"),  # < 1 char
-        ({"display_name": "d" * 101}, "display_name"),  # > 100 chars
+        ({"username": "ab"}, "username"),
+        ({"username": "a" * 51}, "username"),
+        ({"username": "bad space"}, "username"),
+        ({"username": "bad@char!"}, "username"),
+        ({"password": "12345"}, "password"),
+        ({"password": "p" * 101}, "password"),
+        ({"display_name": ""}, "display_name"),
+        ({"display_name": "d" * 101}, "display_name"),
     ],
 )
 async def test_register_invalid_field_formats(invalid_payload_override: dict, expected_field: str):
-    """Kiểm tra toàn bộ ràng buộc định dạng (email, độ dài/regex username, độ dài password, display_name)."""
+    """Rejects invalid email, username, password, and display_name formats with 422 Unprocessable Entity."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     base_payload = {
@@ -236,14 +226,13 @@ async def test_register_invalid_field_formats(invalid_payload_override: dict, ex
 
 @pytest.mark.asyncio
 async def test_register_duplicate_email_and_duplicate_username():
-    """Đăng ký trùng email hoặc trùng username đã tạo trong DB phải bị từ chối với 400."""
+    """Rejects registration attempts using an already-registered email or username with 400 Bad Request."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     email = f"dup_{uid}@example.com"
     username = f"dup_user_{uid}"
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Tạo tài khoản gốc và hoàn tất OTP
         first_res = await client.post(
             "/api/v1/auth/register",
             json={
@@ -261,7 +250,7 @@ async def test_register_duplicate_email_and_duplicate_username():
         )
         assert verify_res.status_code == 200
 
-        # 2. Trùng email nhưng khác username -> 400
+        # Duplicate email with a different username -> 400
         dup_email_res = await client.post(
             "/api/v1/auth/register",
             json={
@@ -274,7 +263,7 @@ async def test_register_duplicate_email_and_duplicate_username():
         assert dup_email_res.status_code == 400
         assert "đã được sử dụng" in dup_email_res.json()["detail"]
 
-        # 3. Trùng username nhưng khác email -> 400
+        # Duplicate username with a different email -> 400
         dup_user_res = await client.post(
             "/api/v1/auth/register",
             json={
@@ -290,7 +279,7 @@ async def test_register_duplicate_email_and_duplicate_username():
 
 @pytest.mark.asyncio
 async def test_register_username_reservation_and_auto_release_on_expiry():
-    """Khi User A đang giữ chỗ username chờ OTP, User B không thể lấy; nhưng khi yêu cầu của A tự hủy, B lấy được."""
+    """Reserves a staged username in Redis during pending OTP verification and releases it upon TTL expiry."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     hot_username = f"idol_{uid}"
@@ -298,7 +287,6 @@ async def test_register_username_reservation_and_auto_release_on_expiry():
     email_b = f"user_b_{uid}@example.com"
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. User A đăng ký giữ chỗ hot_username (chưa nhập OTP)
         res_a = await client.post(
             "/api/v1/auth/register",
             json={
@@ -310,7 +298,7 @@ async def test_register_username_reservation_and_auto_release_on_expiry():
         )
         assert res_a.status_code == 202
 
-        # 2. User B cố lấy cùng hot_username khi yêu cầu của A vẫn còn hạn -> 400
+        # Another user cannot claim the reserved username while User A's pending registration is active -> 400
         res_b_blocked = await client.post(
             "/api/v1/auth/register",
             json={
@@ -323,12 +311,12 @@ async def test_register_username_reservation_and_auto_release_on_expiry():
         assert res_b_blocked.status_code == 400
         assert "đang được giữ chỗ" in res_b_blocked.json()["detail"]
 
-        # 3. Giả lập yêu cầu của User A hết hạn tự hủy sau 10 phút trên Redis
+        # Simulate TTL expiration of User A's staged registration in Redis
         r = get_redis_client()
         await r.delete(f"pending_reg:email:{email_a}")
         await r.delete(f"pending_reg:username:{hot_username.lower()}")
 
-        # 4. Giờ User B đăng ký lại hot_username -> Thành công (202 Accepted)
+        # User B can now claim the released username -> 202 Accepted
         res_b_ok = await client.post(
             "/api/v1/auth/register",
             json={
@@ -342,13 +330,13 @@ async def test_register_username_reservation_and_auto_release_on_expiry():
 
 
 # ==============================================================================
-# 4. TỰ HỦY KHI QUÁ HẠN, HỦY KHI SAI OTP 5 LẦN & CHỐNG SPAM OTP
+# 4. TTL EXPIRATION, BRUTE-FORCE CANCELLATION & ANTI-SPAM LIMITS
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 async def test_register_auto_cancel_after_ttl_expiration():
-    """Nếu yêu cầu đăng ký tạm hết hạn 10 phút trên Redis, gọi verify-otp phải báo lỗi 400 và không tạo User."""
+    """Rejects OTP verification with 400 Bad Request when the staged registration TTL has expired."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     email = f"expired_{uid}@example.com"
@@ -366,7 +354,6 @@ async def test_register_auto_cancel_after_ttl_expiration():
         assert reg_res.status_code == 202
         otp_code = reg_res.json()["dev_otp"]
 
-        # Giả lập hết hạn TTL 10 phút của pending_reg
         r = get_redis_client()
         await r.delete(f"pending_reg:email:{email}")
 
@@ -380,7 +367,7 @@ async def test_register_auto_cancel_after_ttl_expiration():
 
 @pytest.mark.asyncio
 async def test_register_otp_brute_force_5_strikes_cancels_pending_registration():
-    """Nhập sai OTP 5 lần liên tiếp sẽ tự hủy cả mã OTP lẫn yêu cầu đăng ký tạm trên Redis."""
+    """Cancels both the OTP and the staged registration in Redis after 5 consecutive failed OTP attempts."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     email = f"bf_otp_{uid}@example.com"
@@ -398,19 +385,17 @@ async def test_register_otp_brute_force_5_strikes_cancels_pending_registration()
         assert reg_res.status_code == 202
         real_otp = reg_res.json()["dev_otp"]
 
-        # Nhập sai 5 lần liên tiếp
-        for i in range(5):
+        for _ in range(5):
             bad_res = await client.post(
                 "/api/v1/auth/email/verify-otp",
                 json={"email": email, "code": "000000", "purpose": "VERIFY_EMAIL"},
             )
             assert bad_res.status_code == 400
 
-        # Kiểm chứng: Yêu cầu đăng ký tạm đã bị xóa khỏi Redis sau lần sai thứ 5
         r = get_redis_client()
         assert await r.get(f"pending_reg:email:{email}") is None
 
-        # Ngay cả khi nhập đúng mã OTP thật ở lần thứ 6 -> Vẫn bị từ chối vì yêu cầu đã bị hủy
+        # Subsequent attempt with the original OTP is rejected because the staged registration was purged
         late_res = await client.post(
             "/api/v1/auth/email/verify-otp",
             json={"email": email, "code": real_otp, "purpose": "VERIFY_EMAIL"},
@@ -420,7 +405,7 @@ async def test_register_otp_brute_force_5_strikes_cancels_pending_registration()
 
 @pytest.mark.asyncio
 async def test_send_otp_rejects_unrequested_random_email():
-    """Chống spam OTP: Gọi /email/send-otp cho một email lạ chưa từng gửi form đăng ký phải bị chặn với 400."""
+    """Rejects OTP dispatch requests for emails that have no active account or pending registration."""
     transport = ASGITransport(app=app)
     random_email = f"random_victim_{uuid.uuid4().hex[:6]}@gmail.com"
 
@@ -440,7 +425,7 @@ async def test_send_otp_rejects_unrequested_random_email():
 
 @pytest.mark.asyncio
 async def test_register_ip_rate_limit():
-    """Giới hạn tối đa 5 lượt khởi tạo đăng ký trên mỗi địa chỉ IP trong 10 phút; lượt thứ 6 trả về 429."""
+    """Enforces a maximum of 5 registration initializations per IP within 10 minutes, returning 429 on the 6th."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         for i in range(5):
@@ -456,7 +441,6 @@ async def test_register_ip_rate_limit():
             )
             assert res.status_code == 202
 
-        # Lượt thứ 6 từ cùng IP -> 429 Too Many Requests
         uid6 = uuid.uuid4().hex[:6]
         res_6 = await client.post(
             "/api/v1/auth/register",
@@ -471,15 +455,15 @@ async def test_register_ip_rate_limit():
 
 
 # ==============================================================================
-# 5. KIỂM TRA KẾT NỐI VÀ XÁC THỰC GMAIL SMTP THẬT (LIVE SMTP AUTHENTICATION CHECK)
+# 5. LIVE GMAIL SMTP AUTHENTICATION CHECK
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 async def test_gmail_smtp_live_authentication():
-    """Kiểm tra trực tiếp kết nối TLS và đăng nhập vào máy chủ smtp.gmail.com:587 bằng cấu hình .env."""
+    """Verifies live STARTTLS connection and login against the configured SMTP server."""
     if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        pytest.skip("Chưa cấu hình SMTP_USER / SMTP_PASSWORD trong .env")
+        pytest.skip("SMTP_USER or SMTP_PASSWORD is not configured in environment.")
 
     smtp = aiosmtplib.SMTP(
         hostname=settings.SMTP_HOST,
@@ -490,4 +474,5 @@ async def test_gmail_smtp_live_authentication():
     await smtp.connect()
     auth_response = await smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
     await smtp.quit()
-    assert auth_response.code == 235  # 235 2.7.0 Accepted
+    assert auth_response.code == 235
+

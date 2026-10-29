@@ -37,6 +37,7 @@ from app.modules.identity.schemas import (
     UserRegister,
     UserLogin,
     GoogleLogin,
+    GoogleLinkRequest,
     OAuthSetPasswordRequest,
     DeleteAccountRequest,
     Token,
@@ -308,29 +309,46 @@ class IdentityService:
 
         Raises:
             HTTPException: 429 if the account is currently locked out.
+            HTTPException: 400 if the account was provisioned via OAuth and has not established a password.
             HTTPException: 401 if credentials are invalid or password mismatch.
         """
+        clean_email = str(data.email).strip().lower()
+
         # 1. Check lockout rate limit
-        await RateLimiter.check_login_lockout(redis, data.email)
+        await RateLimiter.check_login_lockout(redis, clean_email)
 
         # 2. Look up user
         query = (
             select(User)
-            .where(User.email == data.email, User.is_active == True)
+            .where(User.email == clean_email, User.is_active == True)
             .options(selectinload(User.wallet))
         )
         result = await db.execute(query)
         user = result.scalar_one_or_none()
 
-        if not user or not user.password_hash or not verify_password(data.password, user.password_hash):
-            await RateLimiter.record_login_failure(redis, data.email)
+        if not user:
+            await RateLimiter.record_login_failure(redis, clean_email)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Email hoặc mật khẩu không chính xác.",
+            )
+
+        # Reject password authentication for OAuth-provisioned accounts without a password set
+        if not user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tài khoản này được tạo qua Google và chưa thiết lập mật khẩu. Vui lòng đăng nhập bằng Google để tiếp tục và cài đặt mật khẩu.",
+            )
+
+        if not verify_password(data.password, user.password_hash):
+            await RateLimiter.record_login_failure(redis, clean_email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác.",
             )
 
         # 3. Clear failed login attempts on success
-        await RateLimiter.clear_login_failure(redis, data.email)
+        await RateLimiter.clear_login_failure(redis, clean_email)
 
         # 4. Enforce Single Platform Session rule
         await cls.enforce_single_platform_session(db, user.id, client_info.platform)
@@ -371,30 +389,19 @@ class IdentityService:
         )
         return user, tokens
 
-    @classmethod
-    async def google_login(
-        cls,
-        db: AsyncSession,
-        data: GoogleLogin,
-        client_info: ClientInfo,
-    ) -> tuple[User, Token]:
-        """Authenticates or registers a user via Google OAuth2.
-
-        Verifies the Google ID token. If the Google subject ID or email is already
-        registered, automatically links the Google account. If brand new, provisions
-        a new user account with `is_email_verified=True` and wallet balance of 0.
+    @staticmethod
+    def verify_google_id_token(id_token_str: str) -> dict:
+        """Strictly verifies a Google JWT ID token against Google's public JWKS keys.
 
         Args:
-            db (AsyncSession): Database session.
-            data (GoogleLogin): Google OAuth payload.
-            client_info (ClientInfo): Parsed client IP and device metadata.
+            id_token_str (str): The raw Google ID token string.
 
         Returns:
-            tuple[User, Token]: Logged in user entity and token bundle.
+            dict: Verified claims containing `sub`, `email`, `name`, and `picture`.
 
         Raises:
-            HTTPException: 401 if Google ID token verification fails or email is unverified.
-            HTTPException: 500 if GOOGLE_CLIENT_ID is not configured on the server.
+            HTTPException: 500 if GOOGLE_CLIENT_ID is missing.
+            HTTPException: 401 if token signature, audience, expiry, issuer, or email_verified check fails.
         """
         if not settings.GOOGLE_CLIENT_ID:
             raise HTTPException(
@@ -402,10 +409,9 @@ class IdentityService:
                 detail="Hệ thống chưa cấu hình GOOGLE_CLIENT_ID để xác thực Google OAuth.",
             )
 
-        # 1. Strictly verify Google ID token with Google's public keys
         try:
             id_info = google_id_token.verify_oauth2_token(
-                data.id_token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+                id_token_str, google_requests.Request(), settings.GOOGLE_CLIENT_ID
             )
         except Exception as e:
             raise HTTPException(
@@ -429,29 +435,161 @@ class IdentityService:
                 detail="Tài khoản Google không hợp lệ hoặc email chưa được Google xác minh.",
             )
 
-        display_name = id_info.get("name") or google_email.split("@")[0]
-        avatar_url = id_info.get("picture")
+        clean_email = google_email.strip().lower()
+        return {
+            "sub": google_sub,
+            "email": clean_email,
+            "name": id_info.get("name") or clean_email.split("@")[0],
+            "picture": id_info.get("picture"),
+        }
 
-        # 2. Check if user already exists by google_id
-        user = None
-        if google_sub:
-            query = select(User).where(User.google_id == google_sub, User.is_active == True).options(selectinload(User.wallet))
-            result = await db.execute(query)
-            user = result.scalar_one_or_none()
+    @classmethod
+    async def link_google_account(
+        cls,
+        db: AsyncSession,
+        user: User,
+        data: GoogleLinkRequest,
+    ) -> User:
+        """Links a verified Google identity to an authenticated user account.
 
-        # 3. Check if user exists by email -> Auto-link!
-        if not user and google_email:
-            query = select(User).where(User.email == google_email, User.is_active == True).options(selectinload(User.wallet))
+        Args:
+            db (AsyncSession): Database session.
+            user (User): Currently authenticated user entity.
+            data (GoogleLinkRequest): Payload containing the Google ID token.
+
+        Returns:
+            User: Updated user entity with `google_id` linked.
+
+        Raises:
+            HTTPException: 400 if the user is already linked to Google, the Google account
+                belongs to another user, or the Google email does not match the user's email.
+            HTTPException: 401 if Google ID token verification fails.
+        """
+        google_info = cls.verify_google_id_token(data.id_token)
+        google_sub = google_info["sub"]
+        google_email = google_info["email"]
+        avatar_url = google_info["picture"]
+
+        if user.google_id:
+            if user.google_id == google_sub:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Tài khoản của bạn đã được liên kết với tài khoản Google này rồi.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tài khoản của bạn đã được liên kết với một tài khoản Google khác.",
+            )
+
+        # Ensure this google_sub is not already linked to another user
+        existing_sub_query = select(User).where(User.google_id == google_sub, User.id != user.id)
+        existing_sub_res = await db.execute(existing_sub_query)
+        if existing_sub_res.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tài khoản Google này đã được liên kết với một người dùng khác.",
+            )
+
+        if google_email.lower() != user.email.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email của tài khoản Google phải trùng khớp với email tài khoản hiện tại của bạn.",
+            )
+
+        user.google_id = google_sub
+        user.is_email_verified = True
+        if not user.avatar_url and avatar_url:
+            user.avatar_url = avatar_url
+
+        await db.commit()
+        await db.refresh(user, ["wallet"])
+        return user
+
+    @classmethod
+    async def google_login(
+        cls,
+        db: AsyncSession,
+        data: GoogleLogin,
+        client_info: ClientInfo,
+        redis: aioredis.Redis | None = None,
+    ) -> tuple[User, Token]:
+        """Authenticates or provisions a user account via Google OAuth2.
+
+        - Existing `google_id` match: Authenticates the user directly.
+        - Existing `email` match (unlinked account): Requires `data.password` to verify
+          ownership of the existing account before linking `google_id`. Raises `409 Conflict`
+          if `data.password` is omitted.
+        - New email: Automatically provisions a new user account with `password_hash=None`
+          and `is_email_verified=True`.
+
+        Args:
+            db (AsyncSession): Database session.
+            data (GoogleLogin): Google OAuth payload with optional password confirmation.
+            client_info (ClientInfo): Parsed client IP and device metadata.
+            redis (aioredis.Redis | None): Optional Redis client for lockout enforcement during password verification.
+
+        Returns:
+            tuple[User, Token]: Authenticated user entity and token bundle.
+        """
+        google_info = cls.verify_google_id_token(data.id_token)
+        google_sub = google_info["sub"]
+        google_email = google_info["email"]
+        display_name = google_info["name"]
+        avatar_url = google_info["picture"]
+
+        # 1. Check if user already exists by google_id
+        query = (
+            select(User)
+            .where(User.google_id == google_sub, User.is_active == True)
+            .options(selectinload(User.wallet))
+        )
+        result = await db.execute(query)
+        user = result.scalar_one_or_none()
+
+        # 2. Check if user exists by email (not yet linked to this google_sub)
+        if not user:
+            query = (
+                select(User)
+                .where(User.email == google_email, User.is_active == True)
+                .options(selectinload(User.wallet))
+            )
             result = await db.execute(query)
             user = result.scalar_one_or_none()
             if user:
+                if user.google_id and user.google_id != google_sub:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Email này đã được liên kết với một định danh Google khác.",
+                    )
+
+                # Require password verification before linking an existing unlinked account
+                if not data.password:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Email này đã được đăng ký bằng mật khẩu. Vui lòng nhập mật khẩu của tài khoản hiện có để xác nhận liên kết với Google.",
+                    )
+
+                if redis:
+                    await RateLimiter.check_login_lockout(redis, google_email)
+
+                if not user.password_hash or not verify_password(data.password, user.password_hash):
+                    if redis:
+                        await RateLimiter.record_login_failure(redis, google_email)
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Mật khẩu xác nhận liên kết tài khoản không chính xác.",
+                    )
+
+                if redis:
+                    await RateLimiter.clear_login_failure(redis, google_email)
+
                 user.google_id = google_sub
                 user.is_email_verified = True
                 if not user.avatar_url and avatar_url:
                     user.avatar_url = avatar_url
                 await db.flush()
 
-        # 4. If user still doesn't exist -> Create new account
+        # 3. Provision a new account if no matching user exists
         if not user:
             base_username = google_email.split("@")[0][:40]
             username = f"{base_username}_{uuid.uuid4().hex[:6]}"
@@ -469,14 +607,13 @@ class IdentityService:
             db.add(user)
             await db.flush()
 
-            # Wallet balance: 0 coins
             wallet = Wallet(user_id=user.id, coin_balance=0)
             db.add(wallet)
 
-        # 5. Enforce single platform session
+        # 4. Enforce single platform session
         await cls.enforce_single_platform_session(db, user.id, client_info.platform)
 
-        # 6. Issue tokens & session
+        # 5. Issue tokens & session
         session_id = uuid.uuid4()
         access_token = create_access_token({
             "sub": str(user.id),
@@ -519,7 +656,7 @@ class IdentityService:
         data: OAuthSetPasswordRequest,
         redis: aioredis.Redis,
     ) -> dict:
-        """Sets a password on an OAuth-registered account following OTP verification.
+        """Establishes a password on an OAuth-provisioned account following OTP verification.
 
         Args:
             db (AsyncSession): Database session.
@@ -531,8 +668,13 @@ class IdentityService:
             dict: Success confirmation message.
 
         Raises:
-            HTTPException: 400 if OTP is incorrect or expired.
+            HTTPException: 400 if account already has a password, or OTP is incorrect/expired.
         """
+        if user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tài khoản đã thiết lập mật khẩu trước đó. Vui lòng sử dụng chức năng đổi mật khẩu.",
+            )
         await OTPService.verify_otp(redis, user.email, data.otp, OTPPurpose.OAUTH_SET_PASSWORD)
         user.password_hash = get_password_hash(data.new_password)
         await db.commit()

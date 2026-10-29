@@ -1,14 +1,10 @@
-"""Unit & Integration Tests for Standard Email/Password Login & Session Management (FR-01).
+"""Integration tests for email/password authentication and session management.
 
 Covers:
-1. Valid login cases (minimal required fields `email` + `password`, full fields with `platform="MOBILE"` and `device_id`).
-2. Missing required fields (missing `email`, missing `password`, empty payload `{}`, `platform="MOBILE"` without `device_id`).
-3. Invalid field formats & credentials:
-   - Malformed email formats (422).
-   - Non-existent email or unverified staged registration (401).
-   - Wrong password (401).
-   - 5 consecutive failed attempts triggering 15-minute brute-force lockout (429).
-4. Multi-platform session enforcement (Single Active Session per Platform), Refresh Token Rotation, and Account Deletion.
+- Valid login requests (minimal fields and optional mobile device metadata).
+- Missing required fields (`email`, `password`, empty payload, and mobile `device_id`).
+- Invalid email formats, unknown accounts, wrong passwords, and 5-attempt brute-force lockout.
+- Single active session per platform enforcement, refresh token rotation, and account deletion.
 """
 
 import uuid
@@ -29,7 +25,7 @@ async def _register_verified_user(
     device_id: str | None = None,
     headers: dict | None = None,
 ) -> dict:
-    """Helper thực hiện đăng ký 2 bước (Stage + Verify OTP) để tạo tài khoản hợp lệ phục vụ test đăng nhập."""
+    """Completes staged registration and OTP verification to provision an active test user."""
     payload = {
         "email": email,
         "username": username,
@@ -54,13 +50,13 @@ async def _register_verified_user(
 
 
 # ==============================================================================
-# 1. CASE ĐỦ TRƯỜNG HỢP LỆ (VALID LOGIN CASES)
+# 1. VALID AUTHENTICATION REQUESTS
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 async def test_login_valid_minimal_and_full_fields():
-    """Đăng nhập thành công khi truyền đủ trường bắt buộc (email, password) và khi kèm đầy đủ platform/device_id."""
+    """Authenticates a verified user with minimal credentials and with mobile platform metadata."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:8]
     email = f"login_ok_{uid}@example.com"
@@ -76,7 +72,7 @@ async def test_login_valid_minimal_and_full_fields():
             display_name="Login Valid User",
         )
 
-        # 1. Đăng nhập với các trường tối thiểu bắt buộc (email, password)
+        # Minimal required fields (email, password)
         login_min = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": password},
@@ -89,7 +85,7 @@ async def test_login_valid_minimal_and_full_fields():
         assert data_min["user"]["email"] == email
         assert data_min["user"]["is_email_verified"] is True
 
-        # 2. Đăng nhập với đầy đủ trường tùy chọn (platform='MOBILE', device_id)
+        # Full payload with optional mobile platform and device_id
         login_full = await client.post(
             "/api/v1/auth/login",
             json={
@@ -105,14 +101,14 @@ async def test_login_valid_minimal_and_full_fields():
 
 
 # ==============================================================================
-# 2. CASE THIẾU TRƯỜNG (MISSING FIELDS)
+# 2. MISSING REQUIRED FIELDS
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_field", ["email", "password"])
 async def test_login_missing_required_fields(missing_field: str):
-    """Bỏ trống email hoặc password khi đăng nhập phải bị từ chối với 422."""
+    """Rejects login requests missing email or password with 422 Unprocessable Entity."""
     transport = ASGITransport(app=app)
     payload = {
         "email": "someuser@example.com",
@@ -129,7 +125,7 @@ async def test_login_missing_required_fields(missing_field: str):
 
 @pytest.mark.asyncio
 async def test_login_empty_payload():
-    """Gửi body rỗng {} tới /api/v1/auth/login phải bị từ chối với 422."""
+    """Rejects an empty login payload with 422 Unprocessable Entity."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/api/v1/auth/login", json={})
@@ -139,7 +135,7 @@ async def test_login_empty_payload():
 
 @pytest.mark.asyncio
 async def test_login_mobile_missing_device_id():
-    """Đăng nhập với platform='MOBILE' nhưng thiếu device_id phải bị từ chối với 400."""
+    """Rejects mobile login requests that omit device_id with 400 Bad Request."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     email = f"mob_login_{uid}@example.com"
@@ -165,14 +161,14 @@ async def test_login_mobile_missing_device_id():
 
 
 # ==============================================================================
-# 3. CASE SAI TRƯỜNG / SAI THÔNG TIN & KHÓA BRUTE-FORCE (INVALID CREDENTIALS)
+# 3. INVALID CREDENTIALS & BRUTE-FORCE LOCKOUT
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_email", ["not-an-email", "missing@", "@missing.com", ""])
 async def test_login_invalid_email_format(bad_email: str):
-    """Gửi email sai định dạng khi đăng nhập phải bị từ chối ở tầng Schema với 422."""
+    """Rejects malformed email addresses with 422 Unprocessable Entity."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post(
@@ -184,7 +180,7 @@ async def test_login_invalid_email_format(bad_email: str):
 
 @pytest.mark.asyncio
 async def test_login_nonexistent_email_and_wrong_password():
-    """Đăng nhập bằng email chưa tồn tại hoặc sai mật khẩu phải trả về 401 Unauthorized."""
+    """Returns 401 Unauthorized for unknown emails or incorrect passwords."""
     transport = ASGITransport(app=app)
     uid = uuid.uuid4().hex[:6]
     email = f"real_{uid}@example.com"
@@ -198,14 +194,14 @@ async def test_login_nonexistent_email_and_wrong_password():
             password=password,
         )
 
-        # 1. Email chưa từng đăng ký -> 401
+        # Unregistered email -> 401
         res_unknown = await client.post(
             "/api/v1/auth/login",
             json={"email": f"nonexistent_{uid}@example.com", "password": password},
         )
         assert res_unknown.status_code == 401
 
-        # 2. Đúng email nhưng sai mật khẩu -> 401
+        # Registered email with wrong password -> 401
         res_wrong_pwd = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": "WrongPassword999!"},
@@ -215,7 +211,7 @@ async def test_login_nonexistent_email_and_wrong_password():
 
 @pytest.mark.asyncio
 async def test_login_lockout_rate_limit():
-    """Nhập sai mật khẩu 5 lần liên tiếp sẽ khóa tài khoản 15 phút (429 Too Many Requests)."""
+    """Locks the account for 15 minutes (429 Too Many Requests) after 5 consecutive failed password attempts."""
     transport = ASGITransport(app=app)
     email = f"brute_{uuid.uuid4().hex[:6]}@example.com"
     username = f"brute_{uuid.uuid4().hex[:6]}"
@@ -230,7 +226,6 @@ async def test_login_lockout_rate_limit():
             platform="WEB",
         )
 
-        # 5 lần sai liên tiếp -> 401
         for _ in range(5):
             bad = await client.post(
                 "/api/v1/auth/login",
@@ -238,7 +233,7 @@ async def test_login_lockout_rate_limit():
             )
             assert bad.status_code == 401
 
-        # Lần thứ 6 -> Bị khóa bảo vệ với 429
+        # 6th attempt triggers 429 lockout
         locked = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": "WrongPassword!"},
@@ -246,7 +241,7 @@ async def test_login_lockout_rate_limit():
         assert locked.status_code == 429
         assert "khóa bảo vệ" in locked.json()["detail"]
 
-        # Ngay cả khi nhập đúng mật khẩu trong lúc đang bị khóa -> vẫn trả về 429
+        # Valid password is also rejected while lockout is active
         locked_correct = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": password},
@@ -257,20 +252,19 @@ async def test_login_lockout_rate_limit():
 
 
 # ==============================================================================
-# 4. QUẢN LÝ PHIÊN ĐA NỀN TẢNG, REFRESH TOKEN & XÓA TÀI KHOẢN
+# 4. MULTI-PLATFORM SESSION ENFORCEMENT, TOKEN ROTATION & ACCOUNT DELETION
 # ==============================================================================
 
 
 @pytest.mark.asyncio
 async def test_single_active_session_per_platform():
-    """Đảm bảo quy tắc 1 phiên hoạt động trên mỗi nền tảng (MOBILE mới sẽ đá MOBILE cũ, giữ nguyên WEB)."""
+    """Enforces one active session per platform (new MOBILE login revokes previous MOBILE session while keeping WEB active)."""
     transport = ASGITransport(app=app)
     email = f"user_{uuid.uuid4().hex[:6]}@example.com"
     username = f"u_{uuid.uuid4().hex[:6]}"
     password = "StrongPassword123!"
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Đăng ký + xác thực trên MOBILE Device A
         res_a = await _register_verified_user(
             client,
             email=email,
@@ -283,7 +277,6 @@ async def test_single_active_session_per_platform():
         )
         token_a = res_a["tokens"]["access_token"]
 
-        # 2. Đăng nhập trên WEB
         res_web = await client.post(
             "/api/v1/auth/login",
             json={
@@ -296,7 +289,6 @@ async def test_single_active_session_per_platform():
         assert res_web.status_code == 200
         token_web = res_web.json()["tokens"]["access_token"]
 
-        # Kiểm tra danh sách phiên: có 2 phiên (MOBILE và WEB)
         sess_res = await client.get(
             "/api/v1/auth/sessions",
             headers={"Authorization": f"Bearer {token_web}"},
@@ -306,7 +298,7 @@ async def test_single_active_session_per_platform():
         assert len(sessions) == 2
         assert {s["platform"] for s in sessions} == {"MOBILE", "WEB"}
 
-        # 3. Đăng nhập trên MOBILE Device B -> Hủy phiên MOBILE Device A
+        # Logging in on MOBILE Device B revokes MOBILE Device A
         res_b = await client.post(
             "/api/v1/auth/login",
             json={
@@ -319,14 +311,12 @@ async def test_single_active_session_per_platform():
         )
         assert res_b.status_code == 200
 
-        # Token của Device A bị từ chối với 401
         profile_a = await client.get(
             "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token_a}"},
         )
         assert profile_a.status_code == 401
 
-        # Phiên WEB vẫn hoạt động bình thường
         profile_web = await client.get(
             "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token_web}"},
@@ -336,7 +326,7 @@ async def test_single_active_session_per_platform():
 
 @pytest.mark.asyncio
 async def test_refresh_token_rotation():
-    """Kiểm tra xoay vòng Refresh Token (token cũ bị vô hiệu hóa ngay sau khi sử dụng)."""
+    """Rotates the refresh token on use and invalidates replay of the previous refresh token."""
     transport = ASGITransport(app=app)
     email = f"rotate_{uuid.uuid4().hex[:6]}@example.com"
 
@@ -360,7 +350,6 @@ async def test_refresh_token_rotation():
         assert new_tokens["access_token"] != tokens["access_token"]
         assert new_tokens["refresh_token"] != old_refresh
 
-        # Dùng lại refresh_token cũ -> 401
         reuse_res = await client.post(
             "/api/v1/auth/refresh",
             json={"refresh_token": old_refresh},
@@ -370,7 +359,7 @@ async def test_refresh_token_rotation():
 
 @pytest.mark.asyncio
 async def test_account_deletion():
-    """Kiểm tra xóa tài khoản (yêu cầu xác nhận đúng mật khẩu)."""
+    """Soft-deletes the user account only when the correct password is provided."""
     transport = ASGITransport(app=app)
     email = f"del_{uuid.uuid4().hex[:6]}@example.com"
     password = "DeleteMePassword123!"
@@ -399,3 +388,4 @@ async def test_account_deletion():
         )
         assert good_del.status_code == 200
         assert good_del.json()["success"] is True
+
