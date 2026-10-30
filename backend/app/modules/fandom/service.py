@@ -981,7 +981,7 @@ class FandomService:
                 FandomMember.status == "ACTIVE",
                 Fandom.owner_id != current_user.id,
             )
-            .order_by(desc(FandomMember.joined_at))
+            .order_by(desc(Fandom.created_at))
         )
         joined_fandoms = (await db.execute(joined_query)).scalars().all()
 
