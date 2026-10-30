@@ -18,6 +18,7 @@ class FandomDetailScreen extends StatefulWidget {
 class _FandomDetailScreenState extends State<FandomDetailScreen> {
   FandomDetailModel? _fandom;
   bool _isLoading = true;
+  bool _isActionLoading = false;
 
   @override
   void initState() {
@@ -34,6 +35,240 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _handleJoin() async {
+    final auth = context.read<AuthProvider>();
+    if (!auth.isAuthenticated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Vui lòng đăng nhập tài khoản để tham gia Fandom.'),
+          backgroundColor: AppTheme.warning,
+        ),
+      );
+      return;
+    }
+
+    if (_fandom != null && !_fandom!.isPublic) {
+      _showInviteDialog();
+      return;
+    }
+
+    setState(() => _isActionLoading = true);
+    final fandomProvider = context.read<FandomProvider>();
+    final result = await fandomProvider.joinFandom(widget.slug);
+
+    if (!mounted) return;
+    setState(() => _isActionLoading = false);
+
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Thao tác thành công.'),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      _loadFandom();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error'] ?? 'Không thể tham gia Fandom.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleLeave() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Xác nhận rời Fandom?'),
+        content: Text('Bạn có chắc chắn muốn rời khỏi Fandom "${_fandom?.name ?? ''}" không?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Không'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Rời Fandom'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    setState(() => _isActionLoading = true);
+    final fandomProvider = context.read<FandomProvider>();
+    final result = await fandomProvider.leaveFandom(widget.slug);
+
+    if (!mounted) return;
+    setState(() => _isActionLoading = false);
+
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Đã rời khỏi Fandom.'),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      _loadFandom();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error'] ?? 'Không thể rời Fandom.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleCancelRequest() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Hủy yêu cầu tham gia?'),
+        content: const Text('Bạn có chắc chắn muốn rút lại đơn xin gia nhập đang chờ duyệt không?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Không'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Hủy đơn', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    setState(() => _isActionLoading = true);
+    final fandomProvider = context.read<FandomProvider>();
+    final result = await fandomProvider.cancelJoinRequest(widget.slug);
+
+    if (!mounted) return;
+    setState(() => _isActionLoading = false);
+
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Đã hủy yêu cầu tham gia.'),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      _loadFandom();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error'] ?? 'Không thể hủy yêu cầu.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showInviteDialog() async {
+    final codeController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool isSubmitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.key_outlined, color: AppTheme.accent),
+              SizedBox(width: 8),
+              Text('Nhập mã mời Fandom'),
+            ],
+          ),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Fandom này là không gian riêng tư. Bạn cần có mã mời hợp lệ do Chủ Fandom cấp để tham gia.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: codeController,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Mã mời (Invite Code)',
+                    hintText: 'VD: VIP2026',
+                    prefixIcon: Icon(Icons.vpn_key_outlined),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Vui lòng nhập mã mời.';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDialogState(() => isSubmitting = true);
+
+                      final fandomProvider = context.read<FandomProvider>();
+                      final res = await fandomProvider.joinByInvite(codeController.text.trim());
+
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      if (!mounted) return;
+
+                      if (res['success'] == true) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(res['message'] ?? 'Gia nhập Fandom thành công!'),
+                            backgroundColor: AppTheme.success,
+                          ),
+                        );
+                        _loadFandom();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(res['error'] ?? 'Mã mời không hợp lệ.'),
+                            backgroundColor: AppTheme.error,
+                          ),
+                        );
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Gia nhập'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -306,28 +541,138 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // Action Button
-                  if (fandom.isOwner || (auth.isAuthenticated && auth.currentUser?.id.toString() == fandom.ownerId)) ...[
+                  // Action Button Area (FR-04)
+                  if (_isActionLoading) ...[
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      alignment: Alignment.center,
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(width: 12),
+                          Text('Đang xử lý yêu cầu...', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  ] else if (fandom.isOwner || (auth.isAuthenticated && auth.currentUser?.id.toString() == fandom.ownerId)) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                       decoration: BoxDecoration(
-                        color: AppTheme.primary.withValues(alpha: 0.2),
+                        color: AppTheme.primary.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.primary),
+                        border: Border.all(color: AppTheme.primary, width: 1.2),
                       ),
                       child: const Center(
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.shield_outlined, color: AppTheme.primary),
+                            Icon(Icons.shield_outlined, color: AppTheme.primary, size: 20),
                             SizedBox(width: 8),
                             Text(
                               'Bạn là Chủ sở hữu Fandom này (Owner)',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                           ],
                         ),
+                      ),
+                    ),
+                  ] else if (fandom.isMember) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.8), width: 1),
+                            ),
+                            child: const Center(
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'ĐÃ THAM GIA • THÀNH VIÊN',
+                                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.error,
+                            side: const BorderSide(color: AppTheme.error, width: 1.2),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onPressed: _handleLeave,
+                          icon: const Icon(Icons.exit_to_app, size: 18),
+                          label: const Text('Rời Fandom', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  ] else if (fandom.isPendingRequest) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.amberAccent.withValues(alpha: 0.8), width: 1),
+                            ),
+                            child: const Center(
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.hourglass_top, color: Colors.amberAccent, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'ĐANG CHỜ DUYỆT GIA NHẬP',
+                                    style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onPressed: _handleCancelRequest,
+                          icon: const Icon(Icons.close, size: 18),
+                          label: const Text('Hủy yêu cầu', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  ] else if (!fandom.isPublic) ...[
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                        backgroundColor: AppTheme.surfaceLight,
+                        foregroundColor: AppTheme.accent,
+                        side: const BorderSide(color: AppTheme.accent, width: 1),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: _showInviteDialog,
+                      icon: const Icon(Icons.key_outlined),
+                      label: const Text(
+                        'FANDOM RIÊNG TƯ • NHẬP MÃ MỜI ĐỂ GIA NHẬP',
+                        style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ),
                   ] else ...[
@@ -335,22 +680,15 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                       style: ElevatedButton.styleFrom(
                         minimumSize: const Size.fromHeight(48),
                         backgroundColor: AppTheme.primary,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              fandom.admissionMode == 'OPEN'
-                                  ? 'Đã tham gia Fandom thành công!'
-                                  : 'Đã gửi yêu cầu xét duyệt gia nhập đến Chủ Fandom!',
-                            ),
-                            backgroundColor: AppTheme.success,
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.group_add),
+                      onPressed: _handleJoin,
+                      icon: Icon(fandom.admissionMode == 'OPEN' ? Icons.group_add : Icons.assignment_ind_outlined),
                       label: Text(
-                        fandom.admissionMode == 'OPEN' ? 'THAM GIA FANDOM NGAY' : 'GỬI ĐƠN XÉT DUYỆT GIA NHẬP',
+                        fandom.admissionMode == 'OPEN'
+                            ? 'THAM GIA FANDOM NGAY'
+                            : 'GỬI ĐƠN XÉT DUYỆT GIA NHẬP',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ),
                   ],

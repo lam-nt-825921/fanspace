@@ -100,6 +100,23 @@ async def init_db() -> None:
             text("CREATE INDEX IF NOT EXISTS ix_fandom_members_fandom_user_active ON fandom_members (fandom_id, user_id, status);")
         )
 
+        # Membership and Join Requests Concurrency & Anti-Spam Constraints (FR-04)
+        await conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_fandom_members_fandom_user ON fandom_members (fandom_id, user_id);")
+        )
+        await conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_fandom_join_requests_pending ON fandom_join_requests (fandom_id, user_id) WHERE status = 'PENDING';")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_fandom_members_user_id ON fandom_members (user_id);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_fandom_join_requests_fandom_status ON fandom_join_requests (fandom_id, status);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_fandom_join_requests_user_status ON fandom_join_requests (user_id, status);")
+        )
+
         # GIN Trigram indexes for accent-insensitive and case-insensitive search
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_fandoms_name_trgm ON fandoms USING gin (f_unaccent(lower(name)) gin_trgm_ops);")

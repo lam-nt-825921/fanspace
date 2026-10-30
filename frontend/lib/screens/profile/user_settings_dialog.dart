@@ -2,10 +2,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/fandom_model.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/fandom_provider.dart';
 import '../auth/widgets/active_sessions_dialog.dart';
 import '../auth/widgets/email_otp_dialog.dart';
 import '../auth/widgets/oauth_set_password_dialog.dart';
+import '../home/fandom_detail_screen.dart';
 
 class UserSettingsDialog extends StatefulWidget {
   const UserSettingsDialog({super.key});
@@ -63,6 +66,10 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
     },
   ];
 
+  MyFandomsDataModel? _myFandomsData;
+  bool _isLoadingFandoms = true;
+  String _fandomFilter = 'ALL'; // 'ALL', 'MEMBER', 'OWNER', 'PENDING'
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +79,19 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
     _avatarUrlController = TextEditingController(text: user?.avatarUrl ?? '');
     _bannerUrlController = TextEditingController(text: user?.bannerUrl ?? '');
     _bioController = TextEditingController(text: user?.bio ?? '');
+    _loadUserFandoms();
+  }
+
+  Future<void> _loadUserFandoms() async {
+    setState(() => _isLoadingFandoms = true);
+    final fandomProvider = context.read<FandomProvider>();
+    final data = await fandomProvider.fetchMyFandoms();
+    if (mounted) {
+      setState(() {
+        _myFandomsData = data;
+        _isLoadingFandoms = false;
+      });
+    }
   }
 
   @override
@@ -1121,132 +1141,553 @@ class _UserSettingsDialogState extends State<UserSettingsDialog> {
     );
   }
 
-  // 4. Fandoms Tab (Joined & Managed)
+  // 4. Fandoms Tab (Live Data with unified fandoms, owned filter, and pending requests)
   Widget _buildFandomsTab(BuildContext context, Color textColor, Color subColor, bool isDark) {
-    return DefaultTabController(
-      length: 2,
+    final myFandoms = _myFandomsData;
+    final allFandoms = myFandoms?.allFandoms ?? [];
+    final ownedOnly = myFandoms?.managed ?? [];
+    final joinedOnly = myFandoms?.joined ?? [];
+    final pendingRequests = myFandoms?.pendingRequests ?? [];
+
+    return Padding(
+      padding: const EdgeInsets.all(20),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TabBar(
-            labelColor: AppTheme.primary,
-            unselectedLabelColor: subColor,
-            indicatorColor: AppTheme.primary,
-            tabs: const [
-              Tab(text: 'Fandom đang tham gia (3)'),
-              Tab(text: 'Fandom đang quản lý (1)'),
+          // Header Row
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Fandom của tôi',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textColor),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Các cộng đồng bạn đang tham gia hoặc sở hữu.',
+                      style: TextStyle(fontSize: 13, color: subColor),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () => _showJoinByInviteDialog(context),
+                icon: const Icon(Icons.vpn_key_outlined, size: 16),
+                label: const Text('Nhập mã mời', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ),
             ],
           ),
-          Expanded(
-            child: TabBarView(
+          const SizedBox(height: 16),
+
+          // Filter Chips Row
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                // Joined Fandoms List
-                ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _buildFandomItem(
-                      name: 'Sơn Tùng M-TP Fanspace',
-                      category: 'Âm nhạc',
-                      role: 'Hội viên Vàng',
-                      roleColor: Colors.amber,
-                      members: 14200,
-                      isDark: isDark,
-                    ),
-                    _buildFandomItem(
-                      name: 'T1 League of Legends',
-                      category: 'Esports',
-                      role: 'Thành viên',
-                      roleColor: Colors.blue,
-                      members: 28900,
-                      isDark: isDark,
-                    ),
-                    _buildFandomItem(
-                      name: 'NewJeans Bunnies VN',
-                      category: 'Kpop',
-                      role: 'VIP Bunny',
-                      roleColor: Colors.purple,
-                      members: 8500,
-                      isDark: isDark,
-                    ),
-                  ],
-                ),
-                // Managed Fandoms List
-                ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _buildFandomItem(
-                      name: 'Sơn Tùng M-TP Fanspace',
-                      category: 'Âm nhạc',
-                      role: 'Chủ Fandom (Owner)',
-                      roleColor: AppTheme.accent,
-                      members: 14200,
-                      isOwner: true,
-                      isDark: isDark,
-                    ),
-                  ],
-                ),
+                _buildFandomFilterChip('Tất cả (${allFandoms.length})', 'ALL'),
+                const SizedBox(width: 8),
+                _buildFandomFilterChip('Chỉ Fandom sở hữu (${ownedOnly.length})', 'OWNER'),
+                const SizedBox(width: 8),
+                _buildFandomFilterChip('Đang tham gia (${joinedOnly.length})', 'JOINED'),
+                const SizedBox(width: 8),
+                _buildFandomFilterChip('Chờ duyệt (${pendingRequests.length})', 'PENDING'),
               ],
             ),
+          ),
+          const SizedBox(height: 16),
+
+          // Content Area
+          Expanded(
+            child: _isLoadingFandoms
+                ? const Center(child: CircularProgressIndicator())
+                : _fandomFilter == 'PENDING'
+                    ? _buildPendingRequestsList(pendingRequests, textColor, subColor, isDark)
+                    : _buildMembershipsList(
+                        _fandomFilter == 'OWNER'
+                            ? ownedOnly
+                            : (_fandomFilter == 'JOINED' ? joinedOnly : allFandoms),
+                        textColor,
+                        subColor,
+                        isDark,
+                      ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildFandomItem({
-    required String name,
-    required String category,
-    required String role,
-    required Color roleColor,
-    required int members,
-    bool isOwner = false,
-    required bool isDark,
-  }) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
+  Widget _buildFandomFilterChip(String label, String filterKey) {
+    final isSelected = _fandomFilter == filterKey;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (val) {
+        if (val) setState(() => _fandomFilter = filterKey);
+      },
+      selectedColor: AppTheme.primary.withValues(alpha: 0.2),
+      labelStyle: TextStyle(
+        color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 12,
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(
+          color: isSelected ? AppTheme.primary : Colors.white.withValues(alpha: 0.1),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMembershipsList(
+    List<FandomSummaryModel> items,
+    Color textColor,
+    Color subColor,
+    bool isDark,
+  ) {
+    if (items.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: roleColor.withValues(alpha: 0.2),
-              child: Icon(Icons.rocket_launch, color: roleColor, size: 20),
+            Icon(Icons.groups_outlined, size: 48, color: subColor.withValues(alpha: 0.5)),
+            const SizedBox(height: 12),
+            Text(
+              _fandomFilter == 'OWNER'
+                  ? 'Bạn chưa sở hữu Fandom nào.'
+                  : 'Bạn chưa tham gia Fandom nào.',
+              style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 14),
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  const SizedBox(height: 4),
-                  Row(
+            const SizedBox(height: 6),
+            Text(
+              'Hãy khám phá danh bạ cộng đồng công khai và tham gia nhé!',
+              style: TextStyle(color: subColor, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final item = items[index];
+        final isOwner = _myFandomsData?.isOwner(item.id) ?? false;
+        final createdDateStr = _formatDate(item.createdAt);
+
+        return Card(
+          margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: AppTheme.primary,
+                  backgroundImage: item.avatarUrl != null && item.avatarUrl!.isNotEmpty
+                      ? NetworkImage(item.avatarUrl!)
+                      : null,
+                  child: item.avatarUrl == null || item.avatarUrl!.isEmpty
+                      ? Text(
+                          item.name.isNotEmpty ? item.name[0].toUpperCase() : 'F',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 16),
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: roleColor.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(role, style: TextStyle(color: roleColor, fontSize: 10, fontWeight: FontWeight.bold)),
+                      Text(
+                        item.name,
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: textColor),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(width: 8),
-                      Text('• $members thành viên', style: TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: isOwner
+                                  ? Colors.amber.withValues(alpha: 0.2)
+                                  : Colors.green.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: isOwner ? Colors.amber : Colors.green,
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Text(
+                              isOwner ? 'Chủ Fandom (Owner)' : 'Thành viên',
+                              style: TextStyle(
+                                color: isOwner ? Colors.amberAccent : Colors.greenAccent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceLight,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              item.category,
+                              style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary),
+                            ),
+                          ),
+                          Text(
+                            '• ${item.memberCount} tv',
+                            style: TextStyle(color: subColor, fontSize: 11),
+                          ),
+                          if (createdDateStr.isNotEmpty)
+                            Text(
+                              '• Tạo: $createdDateStr',
+                              style: TextStyle(color: subColor, fontSize: 11),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => FandomDetailScreen(slug: item.slug),
+                          ),
+                        );
+                      },
+                      child: const Text('Vào Fandom', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ),
+                    if (!isOwner) ...[
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: 'Rời Fandom',
+                        icon: const Icon(Icons.exit_to_app, color: AppTheme.error, size: 20),
+                        onPressed: () => _handleLeaveFromDialog(item.slug, item.name),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
             ),
-            OutlinedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: Text(isOwner ? 'Quản trị' : 'Truy cập', style: const TextStyle(fontSize: 12)),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPendingRequestsList(
+    List<FandomJoinRequestItemModel> items,
+    Color textColor,
+    Color subColor,
+    bool isDark,
+  ) {
+    if (items.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.hourglass_empty, size: 48, color: subColor.withValues(alpha: 0.5)),
+            const SizedBox(height: 12),
+            Text(
+              'Không có đơn xin gia nhập nào đang chờ duyệt.',
+              style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 14),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final req = items[index];
+        final dateStr = _formatDate(req.createdAt);
+
+        return Card(
+          margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: Colors.amber.withValues(alpha: 0.2),
+                  child: const Icon(Icons.hourglass_top, color: Colors.amber, size: 20),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        req.fandomName,
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: textColor),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'ĐANG CHỜ DUYỆT',
+                              style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          if (dateStr.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            Text('Gửi ngày: $dateStr', style: TextStyle(color: subColor, fontSize: 11)),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () => _handleCancelPendingRequest(req.fandomSlug),
+                  icon: const Icon(Icons.close, size: 14),
+                  label: const Text('Hủy yêu cầu', style: TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleLeaveFromDialog(String slug, String fandomName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Xác nhận rời Fandom?'),
+        content: Text('Bạn có chắc chắn muốn rời khỏi Fandom "$fandomName" không?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Không'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Rời Fandom'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    final fandomProvider = context.read<FandomProvider>();
+    final result = await fandomProvider.leaveFandom(slug);
+
+    if (!mounted) return;
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Đã rời khỏi Fandom.'),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      _loadUserFandoms();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error'] ?? 'Không thể rời Fandom.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleCancelPendingRequest(String slug) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Hủy đơn xin gia nhập?'),
+        content: const Text('Bạn có chắc chắn muốn hủy đơn xin gia nhập đang chờ duyệt không?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Không'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Hủy đơn', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    final fandomProvider = context.read<FandomProvider>();
+    final result = await fandomProvider.cancelJoinRequest(slug);
+
+    if (!mounted) return;
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Đã hủy đơn xin gia nhập.'),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      _loadUserFandoms();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error'] ?? 'Không thể hủy đơn.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showJoinByInviteDialog(BuildContext context) async {
+    final codeController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool isSubmitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.vpn_key_outlined, color: AppTheme.accent),
+              SizedBox(width: 8),
+              Text('Gia nhập bằng mã mời'),
+            ],
+          ),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Nhập mã mời được Chủ Fandom cấp để gia nhập trực tiếp vào Fandom.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: codeController,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Mã mời (Invite Code)',
+                    hintText: 'VD: VIP2026',
+                    prefixIcon: Icon(Icons.key_outlined),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Vui lòng nhập mã mời.';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDialogState(() => isSubmitting = true);
+
+                      final fandomProvider = context.read<FandomProvider>();
+                      final res = await fandomProvider.joinByInvite(codeController.text.trim());
+
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      if (!mounted) return;
+
+                      if (res['success'] == true) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(res['message'] ?? 'Gia nhập Fandom thành công!'),
+                            backgroundColor: AppTheme.success,
+                          ),
+                        );
+                        _loadUserFandoms();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(res['error'] ?? 'Mã mời không hợp lệ.'),
+                            backgroundColor: AppTheme.error,
+                          ),
+                        );
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Gia nhập'),
             ),
           ],
         ),
       ),
     );
+  }
+
+  String _formatDate(DateTime? dt) {
+    if (dt == null) return '';
+    final local = dt.toLocal();
+    return '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}/${local.year}';
   }
 
   // 5. Blacklist Tab
