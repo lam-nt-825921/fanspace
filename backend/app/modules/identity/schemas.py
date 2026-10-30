@@ -197,6 +197,7 @@ class UserOut(BaseModel):
     username: str = Field(..., description="Tên định danh tài khoản")
     display_name: str = Field(..., description="Tên hiển thị công khai")
     avatar_url: str | None = Field(None, description="Đường dẫn ảnh đại diện")
+    banner_url: str | None = Field(None, description="Đường dẫn ảnh bìa cá nhân")
     bio: str | None = Field(None, description="Tiểu sử tóm tắt")
     coin_balance: int = Field(default=0, description="Số dư xu trong ví (khởi tạo bằng 0)")
     is_email_verified: bool = Field(default=False, description="Trạng thái đã xác thực email hay chưa")
@@ -277,9 +278,26 @@ class RevokeAllSessionsResponse(BaseModel):
 
 class UserUpdateProfile(BaseModel):
     """Payload for updating public profile information."""
-    display_name: str | None = Field(None, min_length=1, max_length=100, description="Tên hiển thị mới")
-    avatar_url: str | None = Field(None, max_length=500, description="URL ảnh đại diện mới")
-    bio: str | None = Field(None, max_length=500, description="Tiểu sử tóm tắt")
+    display_name: str | None = Field(None, min_length=1, max_length=50, description="Tên hiển thị mới (tối đa 50 ký tự)")
+    avatar_url: str | None = Field(None, max_length=1000, description="URL ảnh đại diện mới")
+    banner_url: str | None = Field(None, max_length=1000, description="URL ảnh bìa cá nhân mới")
+    bio: str | None = Field(None, max_length=250, description="Tiểu sử tóm tắt (tối đa 250 ký tự)")
+
+
+class UserProfilePublic(BaseModel):
+    """Public profile card projection for previewing another user's identity."""
+    id: uuid.UUID = Field(..., description="ID định danh duy nhất của người dùng")
+    username: str = Field(..., description="Tên định danh tài khoản (@username)")
+    display_name: str = Field(..., description="Tên hiển thị công khai")
+    avatar_url: str | None = Field(None, description="Đường dẫn ảnh đại diện")
+    banner_url: str | None = Field(None, description="Đường dẫn ảnh bìa cá nhân")
+    bio: str | None = Field(None, description="Tiểu sử tóm tắt")
+    system_role: str = Field(default="USER", description="Vai trò hệ thống")
+    created_at: datetime = Field(..., description="Thời điểm tham gia hệ thống")
+    fandoms_owned_count: int = Field(default=0, description="Số lượng Fandom người này làm Chủ sở hữu")
+    fandoms_joined_count: int = Field(default=0, description="Số lượng Fandom người này đã tham gia")
+
+    model_config = {"from_attributes": True}
 
 
 class PasswordChangeRequest(BaseModel):

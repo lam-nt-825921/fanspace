@@ -4,6 +4,7 @@ class UserModel {
   final String username;
   final String displayName;
   final String? avatarUrl;
+  final String? bannerUrl;
   final String? bio;
   final int coinBalance;
   final bool isEmailVerified;
@@ -18,6 +19,7 @@ class UserModel {
     required this.username,
     required this.displayName,
     this.avatarUrl,
+    this.bannerUrl,
     this.bio,
     this.coinBalance = 0,
     this.isEmailVerified = false,
@@ -37,6 +39,7 @@ class UserModel {
       username: json['username'] ?? '',
       displayName: json['display_name'] ?? json['username'] ?? '',
       avatarUrl: json['avatar_url'],
+      bannerUrl: json['banner_url'],
       bio: json['bio'],
       coinBalance: json['coin_balance'] ?? 0,
       isEmailVerified: json['is_email_verified'] ?? false,
@@ -54,6 +57,7 @@ class UserModel {
       'username': username,
       'display_name': displayName,
       'avatar_url': avatarUrl,
+      'banner_url': bannerUrl,
       'bio': bio,
       'coin_balance': coinBalance,
       'is_email_verified': isEmailVerified,
@@ -67,6 +71,7 @@ class UserModel {
   UserModel copyWith({
     String? displayName,
     String? avatarUrl,
+    String? bannerUrl,
     String? bio,
     int? coinBalance,
     bool? isEmailVerified,
@@ -80,6 +85,7 @@ class UserModel {
       username: username,
       displayName: displayName ?? this.displayName,
       avatarUrl: avatarUrl ?? this.avatarUrl,
+      bannerUrl: bannerUrl ?? this.bannerUrl,
       bio: bio ?? this.bio,
       coinBalance: coinBalance ?? this.coinBalance,
       isEmailVerified: isEmailVerified ?? this.isEmailVerified,
@@ -87,6 +93,52 @@ class UserModel {
       hasPassword: hasPassword ?? this.hasPassword,
       isGoogleLinked: isGoogleLinked ?? this.isGoogleLinked,
       createdAt: createdAt,
+    );
+  }
+}
+
+class UserProfilePublicModel {
+  final String id;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final String? bannerUrl;
+  final String? bio;
+  final String systemRole;
+  final DateTime createdAt;
+  final int fandomsOwnedCount;
+  final int fandomsJoinedCount;
+
+  UserProfilePublicModel({
+    required this.id,
+    required this.username,
+    required this.displayName,
+    this.avatarUrl,
+    this.bannerUrl,
+    this.bio,
+    this.systemRole = 'USER',
+    required this.createdAt,
+    this.fandomsOwnedCount = 0,
+    this.fandomsJoinedCount = 0,
+  });
+
+  bool get isAdmin => systemRole == 'SYSTEM_ADMIN';
+  bool get isModerator => systemRole == 'SYSTEM_MODERATOR' || isAdmin;
+
+  factory UserProfilePublicModel.fromJson(Map<String, dynamic> json) {
+    return UserProfilePublicModel(
+      id: json['id']?.toString() ?? '',
+      username: json['username'] ?? '',
+      displayName: json['display_name'] ?? json['username'] ?? '',
+      avatarUrl: json['avatar_url'],
+      bannerUrl: json['banner_url'],
+      bio: json['bio'],
+      systemRole: json['system_role'] ?? 'USER',
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at']) ?? DateTime.now()
+          : DateTime.now(),
+      fandomsOwnedCount: json['fandoms_owned_count'] ?? 0,
+      fandomsJoinedCount: json['fandoms_joined_count'] ?? 0,
     );
   }
 }
