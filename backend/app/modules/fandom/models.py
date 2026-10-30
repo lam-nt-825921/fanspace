@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, Integer, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import String, Boolean, Integer, DateTime, Text, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,6 +49,9 @@ class Fandom(Base):
 
 class FandomMember(Base):
     __tablename__ = "fandom_members"
+    __table_args__ = (
+        UniqueConstraint("fandom_id", "user_id", name="uq_fandom_members_fandom_user"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
