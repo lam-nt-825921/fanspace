@@ -124,8 +124,9 @@ class FandomProvider extends ChangeNotifier {
       });
 
       _isLoading = false;
-      // Refresh list after creation
+      // Refresh lists after creation
       await fetchPublicFandoms();
+      await fetchMyFandoms();
       return true;
     } on DioException catch (e) {
       _errorMessage = e.response?.data?['detail'] ?? 'Không thể tạo Fandom.';
@@ -241,4 +242,56 @@ class FandomProvider extends ChangeNotifier {
       return {'success': false, 'error': 'Lỗi kết nối: $e'};
     }
   }
+
+  Future<Map<String, dynamic>> updateFandomVisibility(
+    String identifier,
+    bool isPublic,
+  ) async {
+    try {
+      final response = await _apiClient.dio.patch(
+        '/api/v1/fandoms/$identifier/visibility',
+        data: {'is_public': isPublic},
+      );
+      final data = response.data;
+      await fetchPublicFandoms();
+      await fetchMyFandoms();
+      return {
+        'success': true,
+        'is_public': data['is_public'] ?? isPublic,
+        'message': isPublic
+            ? 'Đã chuyển Fandom sang chế độ Công khai.'
+            : 'Đã chuyển Fandom sang chế độ Riêng tư.',
+      };
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể cập nhật trạng thái hiển thị.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteFandom(
+    String identifier,
+    String password,
+  ) async {
+    try {
+      final response = await _apiClient.dio.delete(
+        '/api/v1/fandoms/$identifier',
+        data: {'password': password},
+      );
+      final data = response.data;
+      await fetchPublicFandoms();
+      await fetchMyFandoms();
+      return {
+        'success': true,
+        'message': data['message'] ?? 'Fandom đã được xóa thành công.',
+      };
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể xóa Fandom.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
 }
+
