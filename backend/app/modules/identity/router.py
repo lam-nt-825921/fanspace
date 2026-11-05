@@ -508,10 +508,11 @@ async def refresh_access_token(
     data: RefreshTokenRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """Rotates refresh tokens and issues fresh access tokens."""
     client_info = extract_client_info(request)
-    return await IdentityService.refresh_token(db, data.refresh_token, client_info)
+    return await IdentityService.refresh_token(db, data.refresh_token, client_info, redis=redis)
 
 
 @auth_router.get(

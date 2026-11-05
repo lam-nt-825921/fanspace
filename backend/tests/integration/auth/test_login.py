@@ -326,7 +326,10 @@ async def test_single_active_session_per_platform():
 
 @pytest.mark.asyncio
 async def test_refresh_token_rotation():
-    """Rotates the refresh token on use and invalidates replay of the previous refresh token."""
+    """Rotates the refresh token on use, serves cached bundle within grace window, and revokes on post-grace replay."""
+    from app.core.redis import get_redis_client
+    from app.core.security import hash_token
+
     transport = ASGITransport(app=app)
     email = f"rotate_{uuid.uuid4().hex[:6]}@example.com"
 
@@ -340,6 +343,7 @@ async def test_refresh_token_rotation():
         )
         tokens = reg_data["tokens"]
         old_refresh = tokens["refresh_token"]
+        session_id = tokens["session_id"]
 
         ref_res = await client.post(
             "/api/v1/auth/refresh",
@@ -349,6 +353,18 @@ async def test_refresh_token_rotation():
         new_tokens = ref_res.json()
         assert new_tokens["access_token"] != tokens["access_token"]
         assert new_tokens["refresh_token"] != old_refresh
+
+        # Within the 10-second concurrent grace window, replaying old_refresh returns the same rotated bundle
+        grace_res = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": old_refresh},
+        )
+        assert grace_res.status_code == 200
+        assert grace_res.json()["refresh_token"] == new_tokens["refresh_token"]
+
+        # Simulate grace window expiration and verify replay revokes the session with 401
+        redis = get_redis_client()
+        await redis.delete(f"refresh_grace:{session_id}:{hash_token(old_refresh)}")
 
         reuse_res = await client.post(
             "/api/v1/auth/refresh",

@@ -3,6 +3,7 @@ from app.modules.identity.models import User, UserSession, SystemRole, PlatformT
 from app.modules.billing.models import Wallet
 from app.modules.fandom.models import Fandom, FandomMember, FandomInvite, FandomJoinRequest
 from app.modules.rbac.models import Role, MemberRole
+from app.modules.chat.models import Channel, Message
 
 __all__ = [
     "User",
@@ -16,5 +17,9 @@ __all__ = [
     "FandomJoinRequest",
     "Role",
     "MemberRole",
+    "Channel",
+    "Message",
 ]
+
+
 

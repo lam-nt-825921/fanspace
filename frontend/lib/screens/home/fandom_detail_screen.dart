@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import '../../core/theme/app_theme.dart';
 import '../../models/fandom_model.dart';
 import '../../providers/auth_provider.dart';
@@ -9,7 +11,13 @@ import '../profile/user_card_dialog.dart';
 
 class FandomDetailScreen extends StatefulWidget {
   final String slug;
-  const FandomDetailScreen({super.key, required this.slug});
+  final FandomDetailModel? initialFandom;
+
+  const FandomDetailScreen({
+    super.key,
+    required this.slug,
+    this.initialFandom,
+  });
 
   @override
   State<FandomDetailScreen> createState() => _FandomDetailScreenState();
@@ -23,7 +31,12 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _loadFandom();
+    if (widget.initialFandom != null) {
+      _fandom = widget.initialFandom;
+      _isLoading = false;
+    } else {
+      _loadFandom();
+    }
   }
 
   Future<void> _loadFandom() async {
@@ -283,7 +296,20 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
 
     if (_fandom == null) {
       return Scaffold(
-        appBar: AppBar(),
+        appBar: AppBar(
+          leading: IconButton(
+            key: const Key('fandom_detail_back_button'),
+            tooltip: 'Quay lại trang chủ',
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/');
+              }
+            },
+          ),
+        ),
         body: const Center(
           child: Text('Không tìm thấy thông tin Fandom.'),
         ),
@@ -299,6 +325,28 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
           SliverAppBar(
             expandedHeight: 220,
             pinned: true,
+            leading: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: CircleAvatar(
+                backgroundColor: Colors.black54,
+                child: IconButton(
+                  key: const Key('fandom_detail_back_button'),
+                  tooltip: 'Quay lại trang chủ',
+                  icon: const Icon(
+                    Icons.arrow_back,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go('/');
+                    }
+                  },
+                ),
+              ),
+            ),
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -557,51 +605,42 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                       ),
                     ),
                   ] else if (fandom.isOwner || (auth.isAuthenticated && auth.currentUser?.id.toString() == fandom.ownerId)) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primary.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.primary, width: 1.2),
-                      ),
-                      child: const Center(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.shield_outlined, color: AppTheme.primary, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              'Bạn là Chủ sở hữu Fandom này (Owner)',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.primary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 15),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             ),
-                          ],
+                            onPressed: () => context.go('/fandoms/${fandom.slug}/space'),
+                            icon: const Icon(Icons.meeting_room_outlined, size: 20),
+                            label: const Text(
+                              'Vào Không gian Fandom (Chủ sở hữu)',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
                   ] else if (fandom.isMember) ...[
                     Row(
                       children: [
                         Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.8), width: 1),
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.primary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 15),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             ),
-                            child: const Center(
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 20),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    'ĐÃ THAM GIA • THÀNH VIÊN',
-                                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13),
-                                  ),
-                                ],
-                              ),
+                            onPressed: () => context.go('/fandoms/${fandom.slug}/space'),
+                            icon: const Icon(Icons.forum_outlined, size: 20),
+                            label: const Text(
+                              'Vào Không gian Fandom',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                           ),
                         ),
@@ -619,6 +658,7 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
                         ),
                       ],
                     ),
+
                   ] else if (fandom.isPendingRequest) ...[
                     Row(
                       children: [

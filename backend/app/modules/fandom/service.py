@@ -179,10 +179,15 @@ class FandomService:
         )
         db.add(member_role)
 
+        from app.modules.chat.service import ChannelService
+
+        db.add_all(ChannelService.build_default_channels(fandom.id))
+
         await db.commit()
         await db.refresh(fandom)
         await cls.invalidate_fandom_caches(redis, slug=clean_slug)
         return fandom
+
 
     @staticmethod
     async def list_public(

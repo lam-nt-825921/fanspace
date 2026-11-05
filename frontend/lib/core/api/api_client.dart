@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../constants/app_constants.dart';
@@ -8,7 +10,7 @@ class ApiClient {
 
   late final Dio dio;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
-  bool _isRefreshing = false;
+  Completer<String?>? _refreshCompleter;
 
   /// Callback triggered when authentication completely fails (e.g. refresh token expired or revoked)
   void Function()? onSessionExpired;
@@ -38,50 +40,89 @@ class ApiClient {
         onError: (DioException error, handler) async {
           final requestPath = error.requestOptions.path;
 
-          // If 401 occurs and not already attempting refresh/login
           if (error.response?.statusCode == 401 &&
               !requestPath.contains('/auth/login') &&
               !requestPath.contains('/auth/refresh') &&
-              !requestPath.contains('/auth/register') &&
-              !_isRefreshing) {
-            _isRefreshing = true;
+              !requestPath.contains('/auth/register')) {
+            // If another request is already refreshing tokens, wait for it to finish.
+            if (_refreshCompleter != null) {
+              final freshToken = await _refreshCompleter!.future;
+              if (freshToken != null && freshToken.isNotEmpty) {
+                try {
+                  final retryOptions = error.requestOptions;
+                  retryOptions.headers['Authorization'] = 'Bearer $freshToken';
+                  final retryResponse = await dio.fetch(retryOptions);
+                  return handler.resolve(retryResponse);
+                } on DioException catch (retryErr) {
+                  return handler.next(retryErr);
+                }
+              }
+              return handler.next(error);
+            }
+
+            _refreshCompleter = Completer<String?>();
+            String? newAccessToken;
+            bool shouldExpireSession = false;
 
             try {
               final refreshToken = await _storage.read(key: 'refresh_token');
-              if (refreshToken != null && refreshToken.isNotEmpty) {
-                // Call refresh endpoint directly using a clean Dio instance
-                final refreshDio = Dio(BaseOptions(baseUrl: AppConstants.baseUrl));
+              if (refreshToken == null || refreshToken.isEmpty) {
+                shouldExpireSession = true;
+              } else {
+                final refreshDio =
+                    Dio(BaseOptions(baseUrl: AppConstants.baseUrl));
                 final res = await refreshDio.post(
                   '/api/v1/auth/refresh',
                   data: {'refresh_token': refreshToken},
                 );
 
-                if (res.statusCode == 200) {
-                  final newAccessToken = res.data['access_token'];
-                  final newRefreshToken = res.data['refresh_token'];
-                  await saveTokens(
-                    accessToken: newAccessToken,
-                    refreshToken: newRefreshToken,
-                  );
-
-                  _isRefreshing = false;
-
-                  // Retry the original failed request with the fresh token
-                  final retryOptions = error.requestOptions;
-                  retryOptions.headers['Authorization'] = 'Bearer $newAccessToken';
-                  final retryResponse = await dio.fetch(retryOptions);
-                  return handler.resolve(retryResponse);
+                if (res.statusCode == 200 && res.data is Map) {
+                  newAccessToken = res.data['access_token']?.toString();
+                  final newRefreshToken = res.data['refresh_token']?.toString();
+                  if (newAccessToken != null &&
+                      newAccessToken.isNotEmpty &&
+                      newRefreshToken != null &&
+                      newRefreshToken.isNotEmpty) {
+                    await saveTokens(
+                      accessToken: newAccessToken,
+                      refreshToken: newRefreshToken,
+                    );
+                  }
+                } else {
+                  shouldExpireSession = true;
                 }
               }
+            } on DioException catch (refreshErr) {
+              final code = refreshErr.response?.statusCode;
+              if (code == 401 || code == 400 || code == 403) {
+                shouldExpireSession = true;
+              }
             } catch (_) {
-              // Refresh failed
+              // Ignore transient non-auth errors during refresh
             } finally {
-              _isRefreshing = false;
+              final completer = _refreshCompleter;
+              _refreshCompleter = null;
+              if (completer != null && !completer.isCompleted) {
+                completer.complete(newAccessToken);
+              }
             }
 
-            // Both token and refresh token are invalid
-            await clearTokens();
-            onSessionExpired?.call();
+            if (newAccessToken != null && newAccessToken.isNotEmpty) {
+              try {
+                final retryOptions = error.requestOptions;
+                retryOptions.headers['Authorization'] =
+                    'Bearer $newAccessToken';
+                final retryResponse = await dio.fetch(retryOptions);
+                return handler.resolve(retryResponse);
+              } on DioException catch (retryErr) {
+                return handler.next(retryErr);
+              }
+            }
+
+            if (shouldExpireSession) {
+              await clearTokens();
+              onSessionExpired?.call();
+            }
           }
 
           return handler.next(error);

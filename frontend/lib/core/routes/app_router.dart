@@ -6,6 +6,7 @@ import '../../screens/auth/oauth_callback_screen.dart';
 import '../../screens/home/public_directory_screen.dart';
 import '../../screens/home/create_fandom_screen.dart';
 import '../../screens/home/fandom_detail_screen.dart';
+import '../../screens/workspace/fandom_workspace_screen.dart';
 import '../../screens/admin/admin_login_screen.dart';
 import '../../screens/admin/admin_permissions_screen.dart';
 
@@ -53,7 +54,16 @@ final GoRouter appRouter = GoRouter(
       },
     ),
     GoRoute(
+      path: '/fandoms/:slug/space',
+      name: 'fandom-workspace',
+      builder: (context, state) {
+        final slug = state.pathParameters['slug'] ?? '';
+        return FandomWorkspaceScreen(slug: slug);
+      },
+    ),
+    GoRoute(
       path: '/admin/login',
+
       name: 'admin-login',
       builder: (context, state) => const AdminLoginScreen(),
     ),

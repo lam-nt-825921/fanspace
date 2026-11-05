@@ -128,8 +128,12 @@ class IdentityService:
                 detail="Tên tài khoản (username) này đang được giữ chỗ bởi một yêu cầu đăng ký khác. Vui lòng chọn tên khác hoặc thử lại sau 10 phút.",
             )
 
-        # 3. Enforce IP registration rate limit
-        await RateLimiter.check_register_limit(redis, client_info.ip_address)
+        # 3. Enforce device-scoped registration rate limit (avoids blocking shared Wi-Fi NAT IPs)
+        await RateLimiter.check_register_limit(
+            redis,
+            client_info.ip_address,
+            client_fingerprint=client_info.device_id or client_info.user_agent,
+        )
 
         # 4. Generate and send 6-digit OTP email (enforces 60s cooldown & 5/hr quota)
         otp_code = await OTPService.send_otp(
@@ -741,23 +745,26 @@ class IdentityService:
         db: AsyncSession,
         refresh_token_str: str,
         client_info: ClientInfo,
+        redis: aioredis.Redis | None = None,
     ) -> Token:
-        """Rotates a refresh token and issues a new access token.
+        """Rotates a refresh token and issues a new access token with a 10-second grace window.
 
         Validates session existence and verifies that the refresh token hash matches
-        the active session record. Immediately rotates the refresh token material
-        to protect against token replay/theft attacks.
+        the active session record. Caches the newly rotated token bundle in Redis for
+        10 seconds so concurrent requests arriving with the just-rotated token receive
+        the fresh bundle instead of triggering false-positive session revocation.
 
         Args:
             db (AsyncSession): Database session.
             refresh_token_str (str): Raw refresh token JWT presented by the client.
             client_info (ClientInfo): Parsed client IP and device metadata.
+            redis (aioredis.Redis | None): Optional Redis client for rotation grace window.
 
         Returns:
             Token: Fresh token bundle containing new access token and rotated refresh token.
 
         Raises:
-            HTTPException: 401 if token is expired, invalid, or replayed.
+            HTTPException: 401 if token is expired, invalid, or replayed outside the grace window.
         """
         credentials_exception = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -789,8 +796,24 @@ class IdentityService:
         if not session or session.expires_at < datetime.now(timezone.utc):
             raise credentials_exception
 
-        # Verify refresh token hash to guard against token theft / reuse
-        if session.refresh_token_hash != hash_token(refresh_token_str):
+        incoming_hash = hash_token(refresh_token_str)
+        grace_key = f"refresh_grace:{session_id}:{incoming_hash}"
+
+        # Verify refresh token hash or check 10-second grace window for concurrent requests
+        if session.refresh_token_hash != incoming_hash:
+            if redis is not None:
+                try:
+                    cached_bundle = await redis.get(grace_key)
+                    if cached_bundle:
+                        data = json.loads(cached_bundle)
+                        return Token(
+                            access_token=data["access_token"],
+                            refresh_token=data["refresh_token"],
+                            session_id=uuid.UUID(data["session_id"]),
+                        )
+                except Exception:
+                    pass
+
             session.is_active = False
             await db.commit()
             raise HTTPException(
@@ -822,11 +845,29 @@ class IdentityService:
         session.ip_address = client_info.ip_address
         await db.commit()
 
-        return Token(
+        token_bundle = Token(
             access_token=new_access,
             refresh_token=new_refresh,
             session_id=session.id,
         )
+
+        if redis is not None:
+            try:
+                await redis.set(
+                    grace_key,
+                    json.dumps(
+                        {
+                            "access_token": new_access,
+                            "refresh_token": new_refresh,
+                            "session_id": str(session.id),
+                        }
+                    ),
+                    ex=10,
+                )
+            except Exception:
+                pass
+
+        return token_bundle
 
     @staticmethod
     async def list_sessions(
