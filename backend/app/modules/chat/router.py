@@ -1,11 +1,13 @@
 """API Routers for fandom communication channels and real-time messages."""
 
 import uuid
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.permissions import IPermissionChecker, get_permission_checker
+from app.core.redis import get_redis
 from app.modules.chat.schemas import (
     ChannelCreate,
     ChannelDeleteResponse,
@@ -15,6 +17,8 @@ from app.modules.chat.schemas import (
     MessageCreate,
     MessageListResponse,
     MessageOut,
+    MessageReactionRequest,
+    MessageUpdate,
 )
 from app.modules.chat.service import ChannelService, MessageService
 from app.modules.identity.models import User
@@ -153,12 +157,33 @@ async def list_channel_messages(
     )
 
 
+@messages_router.get(
+    "/{channel_id}/pins",
+    response_model=list[MessageOut],
+    summary="Lấy danh sách các tin nhắn đang được ghim trong kênh",
+    description="Trả về danh sách các tin nhắn đã được ghim bởi Ban quản trị trong kênh.",
+)
+async def list_pinned_channel_messages(
+    channel_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+) -> list[MessageOut]:
+    """Lists all currently pinned messages in a channel."""
+    return await MessageService.list_pinned_messages(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        perm_checker=perm_checker,
+    )
+
+
 @messages_router.post(
     "/{channel_id}/messages",
     response_model=MessageOut,
     status_code=status.HTTP_201_CREATED,
     summary="Gửi tin nhắn mới vào kênh",
-    description="Kiểm tra quyền gửi tin nhắn/thông báo/đính kèm, lưu CSDL và phát sóng thời gian thực qua Socket.IO.",
+    description="Kiểm tra quyền gửi tin nhắn/thông báo/đính kèm và Slow-mode, lưu CSDL và phát sóng thời gian thực qua Socket.IO.",
 )
 async def send_channel_message(
     channel_id: uuid.UUID,
@@ -166,6 +191,7 @@ async def send_channel_message(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
 ) -> MessageOut:
     """Sends a new message into a text or announcement channel."""
     return await MessageService.send_message(
@@ -173,5 +199,102 @@ async def send_channel_message(
         channel_id=channel_id,
         current_user=current_user,
         data=data,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.put(
+    "/{channel_id}/messages/{message_id}",
+    response_model=MessageOut,
+    summary="Chỉnh sửa nội dung tin nhắn",
+    description="Cho phép tác giả của tin nhắn chỉnh sửa nội dung văn bản (gắn nhãn `đã chỉnh sửa`).",
+)
+async def edit_channel_message(
+    channel_id: uuid.UUID,
+    message_id: uuid.UUID,
+    data: MessageUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+) -> MessageOut:
+    """Edits the text content of an existing message."""
+    return await MessageService.edit_message(
+        db=db,
+        channel_id=channel_id,
+        message_id=message_id,
+        current_user=current_user,
+        data=data,
+        perm_checker=perm_checker,
+    )
+
+
+@messages_router.delete(
+    "/{channel_id}/messages/{message_id}",
+    response_model=MessageOut,
+    summary="Thu hồi hoặc xóa kiểm duyệt tin nhắn",
+    description="Cho phép tác giả tự thu hồi tin nhắn của mình hoặc người có quyền `MODERATE_CHAT` xóa kiểm duyệt tin nhắn vi phạm.",
+)
+async def recall_channel_message(
+    channel_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+) -> MessageOut:
+    """Recalls or moderates a channel message."""
+    return await MessageService.recall_message(
+        db=db,
+        channel_id=channel_id,
+        message_id=message_id,
+        current_user=current_user,
+        perm_checker=perm_checker,
+    )
+
+
+@messages_router.post(
+    "/{channel_id}/messages/{message_id}/reactions",
+    response_model=MessageOut,
+    summary="Thả hoặc gỡ biểu tượng cảm xúc (Emoji Reaction) trên tin nhắn",
+    description="Bật/tắt biểu tượng cảm xúc của người dùng hiện tại trên tin nhắn.",
+)
+async def toggle_message_reaction(
+    channel_id: uuid.UUID,
+    message_id: uuid.UUID,
+    data: MessageReactionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+) -> MessageOut:
+    """Toggles an emoji reaction on a channel message."""
+    return await MessageService.toggle_reaction(
+        db=db,
+        channel_id=channel_id,
+        message_id=message_id,
+        current_user=current_user,
+        data=data,
+        perm_checker=perm_checker,
+    )
+
+
+@messages_router.post(
+    "/{channel_id}/messages/{message_id}/pin",
+    response_model=MessageOut,
+    summary="Ghim hoặc bỏ ghim tin nhắn trong kênh",
+    description="Ghim hoặc bỏ ghim tin nhắn quan trọng lên đầu kênh (yêu cầu quyền `MODERATE_CHAT`).",
+)
+async def toggle_pin_channel_message(
+    channel_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+) -> MessageOut:
+    """Pins or unpins a message in a channel."""
+    return await MessageService.toggle_pin_message(
+        db=db,
+        channel_id=channel_id,
+        message_id=message_id,
+        current_user=current_user,
         perm_checker=perm_checker,
     )

@@ -56,6 +56,34 @@ class MessageSenderModel {
   }
 }
 
+/// Compact summary of a quoted parent message when replying in a channel.
+class MessageReplyPreviewModel {
+  final String id;
+  final String senderId;
+  final String senderDisplayName;
+  final String content;
+  final bool isRecalled;
+
+  const MessageReplyPreviewModel({
+    required this.id,
+    required this.senderId,
+    required this.senderDisplayName,
+    required this.content,
+    this.isRecalled = false,
+  });
+
+  factory MessageReplyPreviewModel.fromJson(Map<String, dynamic> json) {
+    return MessageReplyPreviewModel(
+      id: json['id']?.toString() ?? '',
+      senderId: json['sender_id']?.toString() ?? '',
+      senderDisplayName:
+          json['sender_display_name']?.toString() ?? 'Thành viên',
+      content: json['content']?.toString() ?? '',
+      isRecalled: json['is_recalled'] == true,
+    );
+  }
+}
+
 /// Represents a single message posted in a Fandom text or announcement channel.
 class MessageModel {
   final String id;
@@ -66,6 +94,7 @@ class MessageModel {
   final String content;
   final List<MessageAttachmentModel> attachments;
   final String? replyToId;
+  final MessageReplyPreviewModel? replyTo;
   final bool isPinned;
   final Map<String, dynamic> reactions;
   final bool isEdited;
@@ -82,6 +111,7 @@ class MessageModel {
     required this.content,
     this.attachments = const [],
     this.replyToId,
+    this.replyTo,
     this.isPinned = false,
     this.reactions = const {},
     this.isEdited = false,
@@ -94,6 +124,7 @@ class MessageModel {
     final rawAttachments = json['attachments'];
     final rawReactions = json['reactions'];
     final rawSender = json['sender'];
+    final rawReplyTo = json['reply_to'];
 
     return MessageModel(
       id: json['id']?.toString() ?? '',
@@ -115,6 +146,9 @@ class MessageModel {
               .toList()
           : const [],
       replyToId: json['reply_to_id']?.toString(),
+      replyTo: rawReplyTo is Map<String, dynamic>
+          ? MessageReplyPreviewModel.fromJson(rawReplyTo)
+          : null,
       isPinned: json['is_pinned'] == true,
       reactions: rawReactions is Map<String, dynamic> ? rawReactions : const {},
       isEdited: json['is_edited'] == true,

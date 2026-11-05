@@ -69,6 +69,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
   bool _isSendingMessage = false;
   bool _isUploadingAttachment = false;
   final List<MessageAttachmentModel> _pendingAttachments = [];
+  MessageModel? _replyingToMessage;
   Timer? _pollingTimer;
 
   @override
@@ -154,6 +155,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
       _selectedChannel = channel;
       _activeSection = WorkspaceSection.channel;
       _pendingAttachments.clear();
+      _replyingToMessage = null;
     });
 
     _pollingTimer?.cancel();
@@ -235,17 +237,55 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
       final page = MessageListResponseModel.fromJson(
         res.data as Map<String, dynamic>,
       );
-      final current = _messagesByChannel[channelId] ?? const [];
+      final current = List<MessageModel>.from(
+        _messagesByChannel[channelId] ?? const [],
+      );
+      final incomingById = {for (final m in page.messages) m.id: m};
+      bool hasChanges = false;
+
+      for (var i = 0; i < current.length; i++) {
+        final updated = incomingById[current[i].id];
+        if (updated != null &&
+            (updated.updatedAt != current[i].updatedAt ||
+                updated.isEdited != current[i].isEdited ||
+                updated.isRecalled != current[i].isRecalled ||
+                updated.isPinned != current[i].isPinned ||
+                updated.reactions.length != current[i].reactions.length)) {
+          current[i] = updated;
+          hasChanges = true;
+        }
+      }
+
       final currentIds = current.map((m) => m.id).toSet();
-      final incoming =
+      final brandNew =
           page.messages.where((m) => !currentIds.contains(m.id)).toList();
-      if (incoming.isNotEmpty) {
+      if (brandNew.isNotEmpty) {
+        current.addAll(brandNew);
+        hasChanges = true;
+      }
+
+      if (hasChanges) {
         setState(() {
-          _messagesByChannel[channelId] = [...current, ...incoming];
+          _messagesByChannel[channelId] = current;
         });
-        _scrollToBottom();
+        if (brandNew.isNotEmpty) {
+          _scrollToBottom();
+        }
       }
     } catch (_) {}
+  }
+
+  void _replaceMessageInChannel(String channelId, MessageModel updated) {
+    final list = List<MessageModel>.from(
+      _messagesByChannel[channelId] ?? const [],
+    );
+    final idx = list.indexWhere((m) => m.id == updated.id);
+    if (idx != -1) {
+      list[idx] = updated;
+      setState(() {
+        _messagesByChannel[channelId] = list;
+      });
+    }
   }
 
   void _scrollToBottom() {
@@ -325,6 +365,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
 
     final attachmentsToSend =
         List<MessageAttachmentModel>.from(_pendingAttachments);
+    final replyToId = _replyingToMessage?.id;
 
     setState(() {
       _isSendingMessage = true;
@@ -344,6 +385,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           data: {
             'content': text,
             'attachments': attachmentsToSend.map((a) => a.toJson()).toList(),
+            'reply_to_id': ?replyToId,
           },
         );
         created = MessageModel.fromJson(res.data as Map<String, dynamic>);
@@ -360,6 +402,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
         _messagesByChannel[channel.id] = list;
         _messageController.clear();
         _pendingAttachments.clear();
+        _replyingToMessage = null;
         _isSendingMessage = false;
       });
       _scrollToBottom();
@@ -383,6 +426,284 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
         _isSendingMessage = false;
       });
     }
+  }
+
+  Future<void> _handleToggleReaction(
+    ChannelModel channel,
+    MessageModel message,
+    String emoji,
+  ) async {
+    try {
+      final res = await _api.dio.post(
+        '/api/v1/channels/${channel.id}/messages/${message.id}/reactions',
+        data: {'emoji': emoji},
+      );
+      if (!mounted) return;
+      final updated = MessageModel.fromJson(res.data as Map<String, dynamic>);
+      _replaceMessageInChannel(channel.id, updated);
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? e.response?.data['detail']?.toString()
+          : 'Không thể thả biểu cảm.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail ?? 'Không thể thả biểu cảm.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showEditMessageDialog(
+    ChannelModel channel,
+    MessageModel message,
+  ) async {
+    final editCtrl = TextEditingController(text: message.content);
+    String? dialogError;
+    bool isSaving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Theme(
+        data: AppTheme.darkTheme,
+        child: StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppTheme.surface,
+              title: const Text(
+                'Chỉnh sửa tin nhắn',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (dialogError != null) ...[
+                      Text(
+                        dialogError!,
+                        style: const TextStyle(
+                          color: AppTheme.error,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    TextField(
+                      controller: editCtrl,
+                      maxLines: 4,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Nội dung tin nhắn',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.of(ctx).pop(),
+                  child: const Text('Hủy'),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                          final trimmed = editCtrl.text.trim();
+                          if (trimmed.isEmpty) {
+                            setDialogState(() {
+                              dialogError =
+                                  'Nội dung tin nhắn không được để trống.';
+                            });
+                            return;
+                          }
+                          setDialogState(() {
+                            isSaving = true;
+                            dialogError = null;
+                          });
+                          try {
+                            final res = await _api.dio.put(
+                              '/api/v1/channels/${channel.id}/messages/${message.id}',
+                              data: {'content': trimmed},
+                            );
+                            final updated = MessageModel.fromJson(
+                              res.data as Map<String, dynamic>,
+                            );
+                            if (!ctx.mounted) return;
+                            Navigator.of(ctx).pop();
+                            _replaceMessageInChannel(channel.id, updated);
+                          } on DioException catch (e) {
+                            final detail = e.response?.data is Map
+                                ? e.response?.data['detail']?.toString()
+                                : 'Không thể chỉnh sửa tin nhắn.';
+                            setDialogState(() {
+                              dialogError =
+                                  detail ?? 'Không thể chỉnh sửa tin nhắn.';
+                              isSaving = false;
+                            });
+                          }
+                        },
+                  child: const Text('Lưu'),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleRecallMessage(
+    ChannelModel channel,
+    MessageModel message,
+  ) async {
+    try {
+      final res = await _api.dio.delete(
+        '/api/v1/channels/${channel.id}/messages/${message.id}',
+      );
+      if (!mounted) return;
+      final updated = MessageModel.fromJson(res.data as Map<String, dynamic>);
+      _replaceMessageInChannel(channel.id, updated);
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? e.response?.data['detail']?.toString()
+          : 'Không thể thu hồi tin nhắn.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail ?? 'Không thể thu hồi tin nhắn.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleTogglePinMessage(
+    ChannelModel channel,
+    MessageModel message,
+  ) async {
+    try {
+      final res = await _api.dio.post(
+        '/api/v1/channels/${channel.id}/messages/${message.id}/pin',
+      );
+      if (!mounted) return;
+      final updated = MessageModel.fromJson(res.data as Map<String, dynamic>);
+      _replaceMessageInChannel(channel.id, updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updated.isPinned
+                ? 'Đã ghim tin nhắn vào kênh #${channel.name}.'
+                : 'Đã bỏ ghim tin nhắn.',
+          ),
+        ),
+      );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? e.response?.data['detail']?.toString()
+          : 'Không thể cập nhật trạng thái ghim tin nhắn.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail ?? 'Không thể cập nhật trạng thái ghim.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showPinnedMessagesDialog(ChannelModel channel) async {
+    final localPinned = (_messagesByChannel[channel.id] ?? const [])
+        .where((m) => m.isPinned && !m.isRecalled)
+        .toList();
+
+    List<MessageModel> pinnedMessages = localPinned;
+    if (widget.initialFandom == null) {
+      try {
+        final res = await _api.dio.get('/api/v1/channels/${channel.id}/pins');
+        if (res.data is List) {
+          pinnedMessages = (res.data as List)
+              .whereType<Map<String, dynamic>>()
+              .map(MessageModel.fromJson)
+              .toList();
+        }
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Theme(
+        data: AppTheme.darkTheme,
+        child: AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Row(
+            children: [
+              Icon(Icons.push_pin, color: AppTheme.primary, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Tin nhắn đã ghim',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: pinnedMessages.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Text(
+                      'Chưa có tin nhắn nào được ghim trong kênh này.',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
+                  )
+                : ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 360),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: pinnedMessages.length,
+                      separatorBuilder: (_, _) =>
+                          const Divider(color: AppTheme.surfaceLight),
+                      itemBuilder: (context, idx) {
+                        final msg = pinnedMessages[idx];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            msg.sender.displayName,
+                            style: const TextStyle(
+                              color: AppTheme.primary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          subtitle: Text(
+                            msg.content,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _showCreateOrEditChannelDialog({ChannelModel? existing}) async {
@@ -1485,6 +1806,17 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                   ],
                 ),
               ),
+              if (channel.type == 'TEXT')
+                IconButton(
+                  key: const Key('channel_pinned_messages_button'),
+                  tooltip: 'Tin nhắn đã ghim',
+                  icon: const Icon(
+                    Icons.push_pin_outlined,
+                    size: 20,
+                    color: AppTheme.textSecondary,
+                  ),
+                  onPressed: () => _showPinnedMessagesDialog(channel),
+                ),
               if (canManage) ...[
                 IconButton(
                   tooltip: 'Chỉnh sửa kênh',
@@ -1592,15 +1924,16 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           );
         }
         final msgIndex = hasMore ? index - 1 : index;
-        return _buildMessageItem(messages[msgIndex]);
+        return _buildMessageItem(channel, messages[msgIndex]);
       },
     );
   }
 
-  Widget _buildMessageItem(MessageModel message) {
+  Widget _buildMessageItem(ChannelModel channel, MessageModel message) {
     final sender = message.sender;
     final timeStr =
         '${message.createdAt.toLocal().hour.toString().padLeft(2, '0')}:${message.createdAt.toLocal().minute.toString().padLeft(2, '0')}';
+    final canModerate = channel.canModerateChat;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1628,6 +1961,44 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (message.replyTo != null) ...[
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceLight.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(8),
+                      border: const Border(
+                        left: BorderSide(color: AppTheme.primary, width: 3),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.reply_rounded,
+                          size: 14,
+                          color: AppTheme.primary,
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            '@${message.replyTo!.senderDisplayName}: ${message.replyTo!.content}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 Wrap(
                   spacing: 8,
                   crossAxisAlignment: WrapCrossAlignment.center,
@@ -1659,6 +2030,12 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                           ),
                         ),
                       ),
+                    if (message.isPinned)
+                      const Icon(
+                        Icons.push_pin,
+                        size: 13,
+                        color: Colors.amberAccent,
+                      ),
                     Text(
                       timeStr,
                       style: const TextStyle(
@@ -1666,10 +2043,28 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                         fontSize: 11,
                       ),
                     ),
+                    if (message.isEdited && !message.isRecalled)
+                      const Text(
+                        '(đã chỉnh sửa)',
+                        style: TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
                   ],
                 ),
-                if (message.content.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                const SizedBox(height: 4),
+                if (message.isRecalled)
+                  const Text(
+                    'Tin nhắn đã bị thu hồi.',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  )
+                else if (message.content.isNotEmpty)
                   SelectableText(
                     message.content,
                     style: const TextStyle(
@@ -1678,8 +2073,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                       height: 1.45,
                     ),
                   ),
-                ],
-                if (message.attachments.isNotEmpty) ...[
+                if (!message.isRecalled && message.attachments.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 10,
@@ -1701,6 +2095,147 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                                   color: Colors.white,
                                   fontSize: 12,
                                 ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+                if (!message.isRecalled && message.reactions.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final entry in message.reactions.entries)
+                        if (entry.value is List &&
+                            (entry.value as List).isNotEmpty)
+                          InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => _handleToggleReaction(
+                              channel,
+                              message,
+                              entry.key,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary.withValues(alpha: 0.16),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color:
+                                      AppTheme.primary.withValues(alpha: 0.4),
+                                ),
+                              ),
+                              child: Text(
+                                '${entry.key} ${(entry.value as List).length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                    ],
+                  ),
+                ],
+                if (!message.isRecalled) ...[
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 4,
+                    children: [
+                      if (channel.canSendMessages)
+                        InkWell(
+                          key: Key('message_reply_${message.id}'),
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () {
+                            setState(() {
+                              _replyingToMessage = message;
+                            });
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            child: Text(
+                              'Trả lời',
+                              style: TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                      for (final emoji in const ['❤️', '🔥', '👍'])
+                        InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () =>
+                              _handleToggleReaction(channel, message, emoji),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
+                            ),
+                            child: Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () => _showEditMessageDialog(channel, message),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          child: Text(
+                            'Chỉnh sửa',
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () => _handleRecallMessage(channel, message),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          child: Text(
+                            'Thu hồi',
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (canModerate)
+                        InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () =>
+                              _handleTogglePinMessage(channel, message),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            child: Text(
+                              message.isPinned ? 'Bỏ ghim' : 'Ghim',
+                              style: const TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 11,
                               ),
                             ),
                           ),
@@ -1766,6 +2301,54 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (_replyingToMessage != null) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceLight,
+                borderRadius: BorderRadius.circular(10),
+                border: const Border(
+                  left: BorderSide(color: AppTheme.primary, width: 3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.reply_rounded,
+                    size: 16,
+                    color: AppTheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Đang trả lời @${_replyingToMessage!.sender.displayName}: ${_replyingToMessage!.content}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.close,
+                      size: 16,
+                      color: AppTheme.textSecondary,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () {
+                      setState(() {
+                        _replyingToMessage = null;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (_pendingAttachments.isNotEmpty) ...[
             SizedBox(
               height: 64,

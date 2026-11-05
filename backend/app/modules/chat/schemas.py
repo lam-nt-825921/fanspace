@@ -166,6 +166,16 @@ class MessageSenderOut(BaseModel):
     is_owner: bool = False
 
 
+class MessageReplyPreviewOut(BaseModel):
+    """Compact preview of the parent message being replied to."""
+
+    id: uuid.UUID
+    sender_id: uuid.UUID
+    sender_display_name: str
+    content: str
+    is_recalled: bool = False
+
+
 class MessageCreate(BaseModel):
     """Payload for sending a new message into a text or announcement channel."""
 
@@ -185,6 +195,28 @@ class MessageCreate(BaseModel):
     )
 
 
+class MessageUpdate(BaseModel):
+    """Payload for editing the text content of an existing message."""
+
+    content: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description="Nội dung mới của tin nhắn sau khi chỉnh sửa",
+    )
+
+
+class MessageReactionRequest(BaseModel):
+    """Payload for toggling an emoji reaction on a message."""
+
+    emoji: str = Field(
+        ...,
+        min_length=1,
+        max_length=32,
+        description="Biểu tượng cảm xúc (Emoji) muốn thả hoặc gỡ",
+    )
+
+
 class MessageOut(BaseModel):
     """Serialized representation of a channel message."""
 
@@ -196,6 +228,7 @@ class MessageOut(BaseModel):
     content: str
     attachments: list[dict] = Field(default_factory=list)
     reply_to_id: uuid.UUID | None = None
+    reply_to: MessageReplyPreviewOut | None = None
     is_pinned: bool = False
     reactions: dict = Field(default_factory=dict)
     is_edited: bool = False

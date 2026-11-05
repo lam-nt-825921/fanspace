@@ -487,6 +487,9 @@ class ChannelService:
 
 
 import re
+from datetime import datetime, timezone
+
+import redis.asyncio as aioredis
 from sqlalchemy import tuple_
 from sqlalchemy.orm import selectinload
 
@@ -495,7 +498,10 @@ from app.modules.chat.schemas import (
     MessageCreate,
     MessageListResponse,
     MessageOut,
+    MessageReactionRequest,
+    MessageReplyPreviewOut,
     MessageSenderOut,
+    MessageUpdate,
 )
 
 
@@ -514,11 +520,29 @@ SEND_MESSAGE_SPEC = PermissionSpec.of(
     },
 )
 
+EDIT_MESSAGE_SPEC = PermissionSpec.of(
+    must_have={Permission.VIEW_CHANNEL, Permission.SEND_MESSAGES},
+    may_have={Permission.EMBED_LINKS},
+)
+
+RECALL_MESSAGE_SPEC = PermissionSpec.of(
+    must_have={Permission.VIEW_CHANNEL},
+    may_have={Permission.MODERATE_CHAT},
+)
+
+PIN_MESSAGE_SPEC = PermissionSpec.of(
+    must_have={Permission.VIEW_CHANNEL, Permission.MODERATE_CHAT},
+)
+
+REACT_MESSAGE_SPEC = PermissionSpec.of(
+    must_have={Permission.VIEW_CHANNEL, Permission.READ_MESSAGES},
+)
+
 _URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
 class MessageService:
-    """Service orchestrating channel message history retrieval and real-time message creation."""
+    """Service orchestrating channel message history retrieval, interactions, and moderation."""
 
     @staticmethod
     async def resolve_channel_and_fandom(
@@ -552,10 +576,72 @@ class MessageService:
         return channel, channel.fandom
 
     @staticmethod
+    async def get_message_or_404(
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        message_id: uuid.UUID,
+    ) -> Message:
+        """Resolves a Message inside a specific channel or raises 404 Not Found."""
+        stmt = (
+            select(Message)
+            .options(selectinload(Message.sender), selectinload(Message.channel))
+            .where(
+                Message.id == message_id,
+                Message.channel_id == channel_id,
+            )
+        )
+        result = await db.execute(stmt)
+        message = result.scalar_one_or_none()
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy tin nhắn yêu cầu trong kênh này.",
+            )
+        return message
+
+    @staticmethod
+    async def build_reply_previews_map(
+        db: AsyncSession,
+        reply_ids: set[uuid.UUID],
+    ) -> dict[uuid.UUID, MessageReplyPreviewOut]:
+        """Loads a map of `MessageReplyPreviewOut` objects for the specified parent message IDs."""
+        if not reply_ids:
+            return {}
+
+        stmt = (
+            select(Message)
+            .options(selectinload(Message.sender))
+            .where(Message.id.in_(reply_ids))
+        )
+        res = await db.execute(stmt)
+        parents = res.scalars().all()
+
+        preview_map: dict[uuid.UUID, MessageReplyPreviewOut] = {}
+        for parent in parents:
+            sender_name = (
+                (parent.sender.display_name or parent.sender.username)
+                if parent.sender
+                else "Thành viên"
+            )
+            preview_map[parent.id] = MessageReplyPreviewOut(
+                id=parent.id,
+                sender_id=parent.sender_id,
+                sender_display_name=sender_name,
+                content=(
+                    "Tin nhắn đã bị thu hồi."
+                    if parent.is_recalled
+                    else parent.content
+                ),
+                is_recalled=parent.is_recalled,
+            )
+        return preview_map
+
+    @staticmethod
     def serialize_message(
         message: Message,
         sender: User,
         fandom_owner_id: uuid.UUID,
+        reply_to: MessageReplyPreviewOut | None = None,
     ) -> MessageOut:
         """Converts a `Message` ORM entity and its `User` sender into `MessageOut`.
 
@@ -563,6 +649,7 @@ class MessageService:
             message: Message ORM instance.
             sender: User ORM instance who authored the message.
             fandom_owner_id: Owner UUID of the parent fandom.
+            reply_to: Optional preview of the quoted parent message.
 
         Returns:
             MessageOut: Serialized message DTO.
@@ -579,9 +666,14 @@ class MessageService:
                 avatar_url=sender.avatar_url,
                 is_owner=(sender.id == fandom_owner_id),
             ),
-            content=message.content,
-            attachments=list(message.attachments or []),
+            content=(
+                "Tin nhắn đã bị thu hồi." if message.is_recalled else message.content
+            ),
+            attachments=(
+                [] if message.is_recalled else list(message.attachments or [])
+            ),
             reply_to_id=message.reply_to_id,
+            reply_to=reply_to,
             is_pinned=message.is_pinned,
             reactions=dict(message.reactions or {}),
             is_edited=message.is_edited,
@@ -600,19 +692,7 @@ class MessageService:
         before_id: uuid.UUID | None = None,
         limit: int = 30,
     ) -> MessageListResponse:
-        """Retrieves chronological message history using cursor-based keyset pagination.
-
-        Args:
-            db: Active database session.
-            channel_id: Target channel UUID.
-            current_user: Authenticated caller.
-            perm_checker: Permission evaluation adapter.
-            before_id: Optional cursor message UUID to fetch older messages before.
-            limit: Maximum number of messages to return (1..100).
-
-        Returns:
-            MessageListResponse: Chronologically ordered slice of messages and cursor metadata.
-        """
+        """Retrieves chronological message history using cursor-based keyset pagination."""
         channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
         await perm_checker.verify(
             user_id=current_user.id,
@@ -653,8 +733,17 @@ class MessageService:
         sliced = rows[:safe_limit]
         sliced.reverse()
 
+        reply_ids = {m.reply_to_id for m in sliced if m.reply_to_id is not None}
+        reply_map = await cls.build_reply_previews_map(db, reply_ids)
+
         serialized = [
-            cls.serialize_message(m, m.sender, fandom.owner_id) for m in sliced
+            cls.serialize_message(
+                m,
+                m.sender,
+                fandom.owner_id,
+                reply_to=reply_map.get(m.reply_to_id) if m.reply_to_id else None,
+            )
+            for m in sliced
         ]
         next_cursor = serialized[0].id if has_more and serialized else None
 
@@ -667,6 +756,50 @@ class MessageService:
         )
 
     @classmethod
+    async def list_pinned_messages(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        current_user: User,
+        perm_checker: IPermissionChecker,
+    ) -> list[MessageOut]:
+        """Lists all currently pinned messages in a channel."""
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=READ_MESSAGES_SPEC,
+            error_detail="Bạn không có quyền xem tin nhắn ghim trong kênh này.",
+        )
+
+        stmt = (
+            select(Message)
+            .options(selectinload(Message.sender), selectinload(Message.channel))
+            .where(
+                Message.channel_id == channel.id,
+                Message.is_pinned.is_(True),
+                Message.is_recalled.is_(False),
+            )
+            .order_by(Message.created_at.desc())
+        )
+        res = await db.execute(stmt)
+        rows = list(res.scalars().all())
+
+        reply_ids = {m.reply_to_id for m in rows if m.reply_to_id is not None}
+        reply_map = await cls.build_reply_previews_map(db, reply_ids)
+
+        return [
+            cls.serialize_message(
+                m,
+                m.sender,
+                fandom.owner_id,
+                reply_to=reply_map.get(m.reply_to_id) if m.reply_to_id else None,
+            )
+            for m in rows
+        ]
+
+    @classmethod
     async def send_message(
         cls,
         db: AsyncSession,
@@ -674,19 +807,9 @@ class MessageService:
         current_user: User,
         data: MessageCreate,
         perm_checker: IPermissionChecker,
+        redis: aioredis.Redis | None = None,
     ) -> MessageOut:
-        """Validates permissions, persists a new message, and broadcasts it over Socket.IO.
-
-        Args:
-            db: Active database session.
-            channel_id: Target channel UUID.
-            current_user: Authenticated sender.
-            data: Message creation payload.
-            perm_checker: Permission evaluation adapter.
-
-        Returns:
-            MessageOut: Persisted and broadcasted message DTO.
-        """
+        """Validates permissions and slow-mode cooldown, persists a new message, and broadcasts it."""
         channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
         if channel.type != "TEXT":
             raise HTTPException(
@@ -708,6 +831,20 @@ class MessageService:
                 detail="Chỉ Chủ Fandom hoặc Ban quản trị mới có quyền đăng thông báo trong kênh này.",
             )
 
+        # Enforce Redis Slow-mode cooldown unless caller holds BYPASS_SLOWMODE
+        slow_key = f"slowmode:channel:{channel.id}:user:{current_user.id}"
+        if (
+            channel.slow_mode_seconds > 0
+            and not eval_ctx.has(Permission.BYPASS_SLOWMODE)
+            and redis is not None
+        ):
+            remaining_ttl = await redis.ttl(slow_key)
+            if remaining_ttl and remaining_ttl > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Kênh đang bật chế độ chậm. Vui lòng chờ {remaining_ttl} giây trước khi gửi tin nhắn tiếp theo.",
+                )
+
         cleaned_content = data.content.strip()
         if not cleaned_content and not data.attachments:
             raise HTTPException(
@@ -727,6 +864,12 @@ class MessageService:
                 detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
             )
 
+        reply_preview: MessageReplyPreviewOut | None = None
+        if data.reply_to_id is not None:
+            parent_msg = await cls.get_message_or_404(db, channel.id, data.reply_to_id)
+            reply_map = await cls.build_reply_previews_map(db, {parent_msg.id})
+            reply_preview = reply_map.get(parent_msg.id)
+
         attachments_payload = [item.model_dump() for item in data.attachments]
         message = Message(
             channel_id=channel.id,
@@ -741,7 +884,19 @@ class MessageService:
         await db.refresh(message)
         message.channel = channel
 
-        message_out = cls.serialize_message(message, current_user, fandom.owner_id)
+        if (
+            channel.slow_mode_seconds > 0
+            and not eval_ctx.has(Permission.BYPASS_SLOWMODE)
+            and redis is not None
+        ):
+            await redis.set(slow_key, "1", ex=channel.slow_mode_seconds)
+
+        message_out = cls.serialize_message(
+            message,
+            current_user,
+            fandom.owner_id,
+            reply_to=reply_preview,
+        )
 
         from app.main import sio
 
@@ -751,3 +906,250 @@ class MessageService:
             room=f"channel:{channel.id}",
         )
         return message_out
+
+    @classmethod
+    async def edit_message(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        message_id: uuid.UUID,
+        current_user: User,
+        data: MessageUpdate,
+        perm_checker: IPermissionChecker,
+    ) -> MessageOut:
+        """Edits an existing message authored by the current user."""
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        eval_ctx = await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=EDIT_MESSAGE_SPEC,
+            error_detail="Bạn không có quyền chỉnh sửa tin nhắn trong kênh này.",
+        )
+
+        message = await cls.get_message_or_404(db, channel.id, message_id)
+        if message.sender_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn chỉ có thể chỉnh sửa tin nhắn của chính mình.",
+            )
+        if message.is_recalled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể chỉnh sửa tin nhắn đã bị thu hồi.",
+            )
+
+        cleaned = data.content.strip()
+        if not cleaned:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nội dung tin nhắn không được để trống.",
+            )
+        if _URL_PATTERN.search(cleaned) and not eval_ctx.has(Permission.EMBED_LINKS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
+            )
+
+        message.content = cleaned
+        message.is_edited = True
+        message.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(message)
+        message.channel = channel
+
+        reply_map = (
+            await cls.build_reply_previews_map(db, {message.reply_to_id})
+            if message.reply_to_id
+            else {}
+        )
+        message_out = cls.serialize_message(
+            message,
+            message.sender or current_user,
+            fandom.owner_id,
+            reply_to=reply_map.get(message.reply_to_id) if message.reply_to_id else None,
+        )
+
+        from app.main import sio
+
+        await sio.emit(
+            "message_updated",
+            message_out.model_dump(mode="json"),
+            room=f"channel:{channel.id}",
+        )
+        return message_out
+
+    @classmethod
+    async def recall_message(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        message_id: uuid.UUID,
+        current_user: User,
+        perm_checker: IPermissionChecker,
+    ) -> MessageOut:
+        """Recalls/deletes a message if the caller is its author or holds MODERATE_CHAT."""
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        eval_ctx = await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=RECALL_MESSAGE_SPEC,
+            error_detail="Bạn không có quyền truy cập kênh này.",
+        )
+
+        message = await cls.get_message_or_404(db, channel.id, message_id)
+        is_author = message.sender_id == current_user.id
+        can_moderate = eval_ctx.has(Permission.MODERATE_CHAT)
+        if not is_author and not can_moderate:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn chỉ có thể thu hồi tin nhắn của chính mình hoặc cần quyền kiểm duyệt tin nhắn.",
+            )
+
+        message.is_recalled = True
+        message.content = "Tin nhắn đã bị thu hồi."
+        message.attachments = None
+        message.is_pinned = False
+        message.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(message)
+        message.channel = channel
+
+        message_out = cls.serialize_message(
+            message,
+            message.sender or current_user,
+            fandom.owner_id,
+        )
+
+        from app.main import sio
+
+        await sio.emit(
+            "message_recalled",
+            message_out.model_dump(mode="json"),
+            room=f"channel:{channel.id}",
+        )
+        return message_out
+
+    @classmethod
+    async def toggle_reaction(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        message_id: uuid.UUID,
+        current_user: User,
+        data: MessageReactionRequest,
+        perm_checker: IPermissionChecker,
+    ) -> MessageOut:
+        """Toggles an emoji reaction for `current_user` on a channel message."""
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=REACT_MESSAGE_SPEC,
+            error_detail="Bạn không có quyền thả biểu cảm trong kênh này.",
+        )
+
+        message = await cls.get_message_or_404(db, channel.id, message_id)
+        if message.is_recalled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể thả biểu cảm vào tin nhắn đã bị thu hồi.",
+            )
+
+        emoji = data.emoji.strip()
+        current_reactions = dict(message.reactions or {})
+        user_id_str = str(current_user.id)
+        users_for_emoji = list(current_reactions.get(emoji, []))
+
+        if user_id_str in users_for_emoji:
+            users_for_emoji.remove(user_id_str)
+            if users_for_emoji:
+                current_reactions[emoji] = users_for_emoji
+            else:
+                current_reactions.pop(emoji, None)
+        else:
+            users_for_emoji.append(user_id_str)
+            current_reactions[emoji] = users_for_emoji
+
+        message.reactions = current_reactions
+        message.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(message)
+        message.channel = channel
+
+        reply_map = (
+            await cls.build_reply_previews_map(db, {message.reply_to_id})
+            if message.reply_to_id
+            else {}
+        )
+        message_out = cls.serialize_message(
+            message,
+            message.sender or current_user,
+            fandom.owner_id,
+            reply_to=reply_map.get(message.reply_to_id) if message.reply_to_id else None,
+        )
+
+        from app.main import sio
+
+        await sio.emit(
+            "message_reaction_updated",
+            message_out.model_dump(mode="json"),
+            room=f"channel:{channel.id}",
+        )
+        return message_out
+
+    @classmethod
+    async def toggle_pin_message(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        message_id: uuid.UUID,
+        current_user: User,
+        perm_checker: IPermissionChecker,
+    ) -> MessageOut:
+        """Pins or unpins a message in a channel (requires MODERATE_CHAT)."""
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=PIN_MESSAGE_SPEC,
+            error_detail="Bạn không có quyền ghim hoặc bỏ ghim tin nhắn trong kênh này.",
+        )
+
+        message = await cls.get_message_or_404(db, channel.id, message_id)
+        if message.is_recalled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể ghim tin nhắn đã bị thu hồi.",
+            )
+
+        message.is_pinned = not message.is_pinned
+        message.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(message)
+        message.channel = channel
+
+        reply_map = (
+            await cls.build_reply_previews_map(db, {message.reply_to_id})
+            if message.reply_to_id
+            else {}
+        )
+        message_out = cls.serialize_message(
+            message,
+            message.sender or current_user,
+            fandom.owner_id,
+            reply_to=reply_map.get(message.reply_to_id) if message.reply_to_id else None,
+        )
+
+        from app.main import sio
+
+        await sio.emit(
+            "message_pinned",
+            message_out.model_dump(mode="json"),
+            room=f"channel:{channel.id}",
+        )
+        return message_out
+

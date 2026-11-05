@@ -145,6 +145,16 @@ class ChannelModel {
   /// Whether the caller can edit or delete this channel.
   bool get canManageChannel => satisfies(manageChannelSpec);
 
+  /// Whether the caller can moderate messages (pin/unpin or recall others' messages) in this channel.
+  bool get canModerateChat => satisfies(
+        const PermissionSpec(
+          mustHave: {
+            FandomPermission.viewChannel,
+            FandomPermission.moderateChat,
+          },
+        ),
+      );
+
   /// Whether the caller can connect to this voice room.
   bool get canConnectVoice => satisfies(connectVoiceSpec);
 
