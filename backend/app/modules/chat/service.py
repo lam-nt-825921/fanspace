@@ -484,3 +484,270 @@ class ChannelService:
             message=f"Đã xóa kênh '{channel_name}' thành công.",
             deleted_channel_id=channel_id,
         )
+
+
+import re
+from sqlalchemy import tuple_
+from sqlalchemy.orm import selectinload
+
+from app.modules.chat.models import Message
+from app.modules.chat.schemas import (
+    MessageCreate,
+    MessageListResponse,
+    MessageOut,
+    MessageSenderOut,
+)
+
+
+READ_MESSAGES_SPEC = PermissionSpec.of(
+    must_have={Permission.VIEW_CHANNEL, Permission.READ_MESSAGES},
+)
+
+SEND_MESSAGE_SPEC = PermissionSpec.of(
+    must_have={Permission.VIEW_CHANNEL, Permission.SEND_MESSAGES},
+    may_have={
+        Permission.SEND_ANNOUNCEMENT,
+        Permission.ATTACH_FILES,
+        Permission.EMBED_LINKS,
+        Permission.BYPASS_SLOWMODE,
+        Permission.MODERATE_CHAT,
+    },
+)
+
+_URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+class MessageService:
+    """Service orchestrating channel message history retrieval and real-time message creation."""
+
+    @staticmethod
+    async def resolve_channel_and_fandom(
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+    ) -> tuple[Channel, Fandom]:
+        """Resolves a Channel and its parent Fandom by `channel_id`.
+
+        Args:
+            db: Active asynchronous database session.
+            channel_id: Target channel UUID.
+
+        Returns:
+            tuple[Channel, Fandom]: Resolved channel and parent fandom entities.
+
+        Raises:
+            HTTPException: 404 Not Found if the channel or fandom does not exist.
+        """
+        stmt = (
+            select(Channel)
+            .options(selectinload(Channel.fandom))
+            .where(Channel.id == channel_id)
+        )
+        result = await db.execute(stmt)
+        channel = result.scalar_one_or_none()
+        if not channel or not channel.fandom:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy kênh giao tiếp yêu cầu.",
+            )
+        return channel, channel.fandom
+
+    @staticmethod
+    def serialize_message(
+        message: Message,
+        sender: User,
+        fandom_owner_id: uuid.UUID,
+    ) -> MessageOut:
+        """Converts a `Message` ORM entity and its `User` sender into `MessageOut`.
+
+        Args:
+            message: Message ORM instance.
+            sender: User ORM instance who authored the message.
+            fandom_owner_id: Owner UUID of the parent fandom.
+
+        Returns:
+            MessageOut: Serialized message DTO.
+        """
+        return MessageOut(
+            id=message.id,
+            channel_id=message.channel_id,
+            fandom_id=message.channel.fandom_id if message.channel else uuid.UUID(int=0),
+            sender_id=message.sender_id,
+            sender=MessageSenderOut(
+                id=sender.id,
+                username=sender.username,
+                display_name=sender.display_name or sender.username,
+                avatar_url=sender.avatar_url,
+                is_owner=(sender.id == fandom_owner_id),
+            ),
+            content=message.content,
+            attachments=list(message.attachments or []),
+            reply_to_id=message.reply_to_id,
+            is_pinned=message.is_pinned,
+            reactions=dict(message.reactions or {}),
+            is_edited=message.is_edited,
+            is_recalled=message.is_recalled,
+            created_at=message.created_at,
+            updated_at=message.updated_at,
+        )
+
+    @classmethod
+    async def list_messages(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        current_user: User,
+        perm_checker: IPermissionChecker,
+        before_id: uuid.UUID | None = None,
+        limit: int = 30,
+    ) -> MessageListResponse:
+        """Retrieves chronological message history using cursor-based keyset pagination.
+
+        Args:
+            db: Active database session.
+            channel_id: Target channel UUID.
+            current_user: Authenticated caller.
+            perm_checker: Permission evaluation adapter.
+            before_id: Optional cursor message UUID to fetch older messages before.
+            limit: Maximum number of messages to return (1..100).
+
+        Returns:
+            MessageListResponse: Chronologically ordered slice of messages and cursor metadata.
+        """
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=READ_MESSAGES_SPEC,
+            error_detail="Bạn không có quyền đọc tin nhắn trong kênh này.",
+        )
+
+        safe_limit = max(1, min(limit, 100))
+        stmt = (
+            select(Message)
+            .options(selectinload(Message.sender), selectinload(Message.channel))
+            .where(Message.channel_id == channel.id)
+        )
+
+        if before_id is not None:
+            anchor_res = await db.execute(
+                select(Message).where(
+                    Message.id == before_id,
+                    Message.channel_id == channel.id,
+                )
+            )
+            anchor = anchor_res.scalar_one_or_none()
+            if anchor is not None:
+                stmt = stmt.where(
+                    tuple_(Message.created_at, Message.id)
+                    < (anchor.created_at, anchor.id)
+                )
+
+        stmt = stmt.order_by(Message.created_at.desc(), Message.id.desc()).limit(
+            safe_limit + 1
+        )
+        result = await db.execute(stmt)
+        rows = list(result.scalars().all())
+
+        has_more = len(rows) > safe_limit
+        sliced = rows[:safe_limit]
+        sliced.reverse()
+
+        serialized = [
+            cls.serialize_message(m, m.sender, fandom.owner_id) for m in sliced
+        ]
+        next_cursor = serialized[0].id if has_more and serialized else None
+
+        return MessageListResponse(
+            channel_id=channel.id,
+            fandom_id=fandom.id,
+            messages=serialized,
+            has_more=has_more,
+            next_cursor=next_cursor,
+        )
+
+    @classmethod
+    async def send_message(
+        cls,
+        db: AsyncSession,
+        channel_id: uuid.UUID,
+        current_user: User,
+        data: MessageCreate,
+        perm_checker: IPermissionChecker,
+    ) -> MessageOut:
+        """Validates permissions, persists a new message, and broadcasts it over Socket.IO.
+
+        Args:
+            db: Active database session.
+            channel_id: Target channel UUID.
+            current_user: Authenticated sender.
+            data: Message creation payload.
+            perm_checker: Permission evaluation adapter.
+
+        Returns:
+            MessageOut: Persisted and broadcasted message DTO.
+        """
+        channel, fandom = await cls.resolve_channel_and_fandom(db, channel_id)
+        if channel.type != "TEXT":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Chỉ có thể gửi tin nhắn văn bản vào kênh loại TEXT.",
+            )
+
+        eval_ctx = await perm_checker.verify(
+            user_id=current_user.id,
+            fandom_id=fandom.id,
+            channel_id=channel.id,
+            spec=SEND_MESSAGE_SPEC,
+            error_detail="Bạn không có quyền gửi tin nhắn trong kênh này.",
+        )
+
+        if channel.is_announcement and not eval_ctx.has(Permission.SEND_ANNOUNCEMENT):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chỉ Chủ Fandom hoặc Ban quản trị mới có quyền đăng thông báo trong kênh này.",
+            )
+
+        cleaned_content = data.content.strip()
+        if not cleaned_content and not data.attachments:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nội dung tin nhắn hoặc tệp đính kèm không được để trống.",
+            )
+
+        if data.attachments and not eval_ctx.has(Permission.ATTACH_FILES):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền đính kèm tệp hoặc hình ảnh trong kênh này.",
+            )
+
+        if _URL_PATTERN.search(cleaned_content) and not eval_ctx.has(Permission.EMBED_LINKS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
+            )
+
+        attachments_payload = [item.model_dump() for item in data.attachments]
+        message = Message(
+            channel_id=channel.id,
+            sender_id=current_user.id,
+            content=cleaned_content,
+            attachments=attachments_payload if attachments_payload else None,
+            reply_to_id=data.reply_to_id,
+            reactions={},
+        )
+        db.add(message)
+        await db.commit()
+        await db.refresh(message)
+        message.channel = channel
+
+        message_out = cls.serialize_message(message, current_user, fandom.owner_id)
+
+        from app.main import sio
+
+        await sio.emit(
+            "new_message",
+            message_out.model_dump(mode="json"),
+            room=f"channel:{channel.id}",
+        )
+        return message_out

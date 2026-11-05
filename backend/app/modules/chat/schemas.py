@@ -1,4 +1,4 @@
-"""Pydantic request and response schemas for fandom communication channels."""
+"""Pydantic request and response schemas for fandom communication channels and messages."""
 
 import uuid
 from datetime import datetime
@@ -146,3 +146,69 @@ class ChannelDeleteResponse(BaseModel):
     success: bool
     message: str
     deleted_channel_id: uuid.UUID
+
+
+class MessageAttachmentItem(BaseModel):
+    """Metadata for a single media attachment inside a chat message."""
+
+    url: str = Field(..., min_length=5, max_length=2048, description="Đường dẫn tệp phương tiện")
+    type: str = Field(default="IMAGE", max_length=30, description="Loại tệp đính kèm (IMAGE, VIDEO, FILE)")
+    filename: str | None = Field(default=None, max_length=255, description="Tên tệp hiển thị")
+
+
+class MessageSenderOut(BaseModel):
+    """Public profile summary of the user who sent a message."""
+
+    id: uuid.UUID
+    username: str
+    display_name: str
+    avatar_url: str | None = None
+    is_owner: bool = False
+
+
+class MessageCreate(BaseModel):
+    """Payload for sending a new message into a text or announcement channel."""
+
+    content: str = Field(
+        default="",
+        max_length=4000,
+        description="Nội dung văn bản của tin nhắn",
+    )
+    attachments: list[MessageAttachmentItem] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Danh sách tệp đính kèm (tối đa 5 tệp)",
+    )
+    reply_to_id: uuid.UUID | None = Field(
+        default=None,
+        description="Mã định danh tin nhắn gốc được trả lời",
+    )
+
+
+class MessageOut(BaseModel):
+    """Serialized representation of a channel message."""
+
+    id: uuid.UUID
+    channel_id: uuid.UUID
+    fandom_id: uuid.UUID
+    sender_id: uuid.UUID
+    sender: MessageSenderOut
+    content: str
+    attachments: list[dict] = Field(default_factory=list)
+    reply_to_id: uuid.UUID | None = None
+    is_pinned: bool = False
+    reactions: dict = Field(default_factory=dict)
+    is_edited: bool = False
+    is_recalled: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class MessageListResponse(BaseModel):
+    """Paginated response containing chronological messages for a channel."""
+
+    channel_id: uuid.UUID
+    fandom_id: uuid.UUID
+    messages: list[MessageOut]
+    has_more: bool
+    next_cursor: uuid.UUID | None = None

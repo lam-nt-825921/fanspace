@@ -1,7 +1,10 @@
-/// Fandom internal workspace screen featuring Welcome, Rules, and Channel navigation.
+/// Fandom internal workspace screen featuring Welcome, Rules, and real-time Channel Chat.
 library;
 
+import 'dart:async';
+
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,6 +12,7 @@ import '../../core/api/api_client.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/channel_model.dart';
 import '../../models/fandom_model.dart';
+import '../../models/message_model.dart';
 
 /// Active navigation section inside the Fandom workspace.
 enum WorkspaceSection {
@@ -17,17 +21,28 @@ enum WorkspaceSection {
   channel,
 }
 
+/// Callback signature for overriding message sending in widget tests.
+typedef SendMessageOverride = Future<MessageModel> Function(
+  String channelId,
+  String content,
+  List<MessageAttachmentModel> attachments,
+);
+
 /// Interactive internal workspace for an active Fandom member or owner.
 class FandomWorkspaceScreen extends StatefulWidget {
   final String slug;
   final FandomDetailModel? initialFandom;
   final FandomChannelsDataModel? initialChannelsData;
+  final Map<String, List<MessageModel>>? initialMessagesByChannel;
+  final SendMessageOverride? onSendMessageOverride;
 
   const FandomWorkspaceScreen({
     super.key,
     required this.slug,
     this.initialFandom,
     this.initialChannelsData,
+    this.initialMessagesByChannel,
+    this.onSendMessageOverride,
   });
 
   @override
@@ -37,6 +52,7 @@ class FandomWorkspaceScreen extends StatefulWidget {
 class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
   final ApiClient _api = ApiClient();
   final TextEditingController _messageController = TextEditingController();
+  final ScrollController _messageScrollController = ScrollController();
 
   FandomDetailModel? _fandom;
   FandomChannelsDataModel? _channelsData;
@@ -46,9 +62,23 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
   bool _isLoading = true;
   String? _errorMessage;
 
+  final Map<String, List<MessageModel>> _messagesByChannel = {};
+  final Map<String, bool> _hasMoreByChannel = {};
+  final Map<String, String?> _nextCursorByChannel = {};
+  bool _isLoadingMessages = false;
+  bool _isSendingMessage = false;
+  bool _isUploadingAttachment = false;
+  final List<MessageAttachmentModel> _pendingAttachments = [];
+  Timer? _pollingTimer;
+
   @override
   void initState() {
     super.initState();
+    if (widget.initialMessagesByChannel != null) {
+      for (final entry in widget.initialMessagesByChannel!.entries) {
+        _messagesByChannel[entry.key] = List<MessageModel>.from(entry.value);
+      }
+    }
     if (widget.initialFandom != null && widget.initialChannelsData != null) {
       _fandom = widget.initialFandom;
       _channelsData = widget.initialChannelsData;
@@ -60,7 +90,9 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
 
   @override
   void dispose() {
+    _pollingTimer?.cancel();
     _messageController.dispose();
+    _messageScrollController.dispose();
     super.dispose();
   }
 
@@ -71,10 +103,10 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
     });
 
     try {
-      final fandomRes = await _api.dio.get('/api/v1/fandoms/${widget.slug}/preview');
-      final channelsRes = await _api.dio.get('/api/v1/fandoms/${widget.slug}/channels');
-
-
+      final fandomRes =
+          await _api.dio.get('/api/v1/fandoms/${widget.slug}/preview');
+      final channelsRes =
+          await _api.dio.get('/api/v1/fandoms/${widget.slug}/channels');
 
       if (!mounted) return;
       final fandom = FandomDetailModel.fromJson(
@@ -104,8 +136,8 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           ? e.response?.data['detail']?.toString()
           : null;
       setState(() {
-        _errorMessage =
-            detail ?? 'Không thể tải dữ liệu không gian Fandom. Vui lòng thử lại.';
+        _errorMessage = detail ??
+            'Không thể tải dữ liệu không gian Fandom. Vui lòng thử lại.';
         _isLoading = false;
       });
     } catch (_) {
@@ -121,7 +153,236 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
     setState(() {
       _selectedChannel = channel;
       _activeSection = WorkspaceSection.channel;
+      _pendingAttachments.clear();
     });
+
+    _pollingTimer?.cancel();
+    if (channel.type == 'TEXT') {
+      if (widget.initialFandom == null &&
+          !_messagesByChannel.containsKey(channel.id)) {
+        _fetchChannelMessages(channel.id, refresh: true);
+      }
+      if (widget.initialFandom == null) {
+        _pollingTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+          if (mounted &&
+              _activeSection == WorkspaceSection.channel &&
+              _selectedChannel?.id == channel.id &&
+              !_isSendingMessage) {
+            _pollLatestMessages(channel.id);
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchChannelMessages(
+    String channelId, {
+    bool refresh = false,
+    String? beforeId,
+  }) async {
+    if (_isLoadingMessages) return;
+    setState(() {
+      _isLoadingMessages = true;
+    });
+
+    try {
+      final res = await _api.dio.get(
+        '/api/v1/channels/$channelId/messages',
+        queryParameters: {
+          'limit': 30,
+          'before_id': ?beforeId,
+        },
+      );
+      if (!mounted) return;
+
+      final page = MessageListResponseModel.fromJson(
+        res.data as Map<String, dynamic>,
+      );
+
+      setState(() {
+        if (refresh || beforeId == null) {
+          _messagesByChannel[channelId] = page.messages;
+        } else {
+          final existing = _messagesByChannel[channelId] ?? const [];
+          final existingIds = existing.map((m) => m.id).toSet();
+          final older =
+              page.messages.where((m) => !existingIds.contains(m.id)).toList();
+          _messagesByChannel[channelId] = [...older, ...existing];
+        }
+        _hasMoreByChannel[channelId] = page.hasMore;
+        _nextCursorByChannel[channelId] = page.nextCursor;
+        _isLoadingMessages = false;
+      });
+
+      if (refresh) {
+        _scrollToBottom();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingMessages = false;
+      });
+    }
+  }
+
+  Future<void> _pollLatestMessages(String channelId) async {
+    try {
+      final res = await _api.dio.get(
+        '/api/v1/channels/$channelId/messages',
+        queryParameters: {'limit': 30},
+      );
+      if (!mounted) return;
+      final page = MessageListResponseModel.fromJson(
+        res.data as Map<String, dynamic>,
+      );
+      final current = _messagesByChannel[channelId] ?? const [];
+      final currentIds = current.map((m) => m.id).toSet();
+      final incoming =
+          page.messages.where((m) => !currentIds.contains(m.id)).toList();
+      if (incoming.isNotEmpty) {
+        setState(() {
+          _messagesByChannel[channelId] = [...current, ...incoming];
+        });
+        _scrollToBottom();
+      }
+    } catch (_) {}
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_messageScrollController.hasClients) {
+        _messageScrollController.animateTo(
+          _messageScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _handlePickAndUploadAttachment() async {
+    if (_isUploadingAttachment || _pendingAttachments.length >= 5) return;
+
+    final file = await FilePicker.pickFile(
+      type: FileType.image,
+    );
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return;
+
+    setState(() {
+      _isUploadingAttachment = true;
+    });
+
+    try {
+      final formData = FormData.fromMap({
+        'target': 'CHAT_ATTACHMENT',
+        'file': MultipartFile.fromBytes(
+          bytes,
+          filename: file.name,
+        ),
+      });
+
+      final res = await _api.dio.post('/api/v1/media/upload', data: formData);
+      if (!mounted) return;
+      final url = res.data['url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        setState(() {
+          _pendingAttachments.add(
+            MessageAttachmentModel(
+              url: url,
+              type: 'IMAGE',
+              filename: file.name,
+            ),
+          );
+        });
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? e.response?.data['detail']?.toString()
+          : 'Không thể tải tệp đính kèm lên.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail ?? 'Không thể tải tệp đính kèm lên.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploadingAttachment = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleSendMessage(ChannelModel channel) async {
+    final text = _messageController.text.trim();
+    if ((text.isEmpty && _pendingAttachments.isEmpty) || _isSendingMessage) {
+      return;
+    }
+
+    final attachmentsToSend =
+        List<MessageAttachmentModel>.from(_pendingAttachments);
+
+    setState(() {
+      _isSendingMessage = true;
+    });
+
+    try {
+      MessageModel created;
+      if (widget.onSendMessageOverride != null) {
+        created = await widget.onSendMessageOverride!(
+          channel.id,
+          text,
+          attachmentsToSend,
+        );
+      } else {
+        final res = await _api.dio.post(
+          '/api/v1/channels/${channel.id}/messages',
+          data: {
+            'content': text,
+            'attachments': attachmentsToSend.map((a) => a.toJson()).toList(),
+          },
+        );
+        created = MessageModel.fromJson(res.data as Map<String, dynamic>);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        final list = List<MessageModel>.from(
+          _messagesByChannel[channel.id] ?? const [],
+        );
+        if (!list.any((m) => m.id == created.id)) {
+          list.add(created);
+        }
+        _messagesByChannel[channel.id] = list;
+        _messageController.clear();
+        _pendingAttachments.clear();
+        _isSendingMessage = false;
+      });
+      _scrollToBottom();
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? e.response?.data['detail']?.toString()
+          : 'Không thể gửi tin nhắn.';
+      setState(() {
+        _isSendingMessage = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail ?? 'Không thể gửi tin nhắn.'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isSendingMessage = false;
+      });
+    }
   }
 
   Future<void> _showCreateOrEditChannelDialog({ChannelModel? existing}) async {
@@ -139,105 +400,128 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setDialogState) {
-            return AlertDialog(
-              backgroundColor: AppTheme.surface,
-              title: Text(
-                existing == null ? 'Tạo kênh giao tiếp mới' : 'Chỉnh sửa cấu hình kênh',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-              content: SizedBox(
-                width: 440,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (dialogError != null) ...[
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppTheme.error.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
+        return Theme(
+          data: AppTheme.darkTheme,
+          child: StatefulBuilder(
+            builder: (ctx, setDialogState) {
+              return AlertDialog(
+                backgroundColor: AppTheme.surface,
+                title: Text(
+                  existing == null
+                      ? 'Tạo kênh giao tiếp mới'
+                      : 'Chỉnh sửa cấu hình kênh',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                content: SizedBox(
+                  width: 440,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (dialogError != null) ...[
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppTheme.error.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              dialogError!,
+                              style: const TextStyle(
+                                color: AppTheme.error,
+                                fontSize: 13,
+                              ),
+                            ),
                           ),
-                          child: Text(
-                            dialogError!,
-                            style: const TextStyle(color: AppTheme.error, fontSize: 13),
+                          const SizedBox(height: 12),
+                        ],
+                        if (existing == null) ...[
+                          const Text(
+                            'Loại kênh',
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SegmentedButton<String>(
+                            segments: const [
+                              ButtonSegment(
+                                value: 'TEXT',
+                                icon: Icon(Icons.tag, size: 18),
+                                label: Text('Kênh Văn bản'),
+                              ),
+                              ButtonSegment(
+                                value: 'VOICE',
+                                icon: Icon(Icons.volume_up_outlined, size: 18),
+                                label: Text('Kênh Thoại'),
+                              ),
+                            ],
+                            selected: {selectedType},
+                            onSelectionChanged: (val) {
+                              setDialogState(() {
+                                selectedType = val.first;
+                              });
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        TextField(
+                          controller: nameCtrl,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            labelText: 'Tên kênh',
+                            hintText: 'Ví dụ: chat-chung, góc-fanart',
                           ),
                         ),
                         const SizedBox(height: 12),
-                      ],
-                      if (existing == null) ...[
-                        const Text(
-                          'Loại kênh',
-                          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-                        ),
-                        const SizedBox(height: 8),
-                        SegmentedButton<String>(
-                          segments: const [
-                            ButtonSegment(
-                              value: 'TEXT',
-                              icon: Icon(Icons.tag, size: 18),
-                              label: Text('Kênh Văn bản'),
-                            ),
-                            ButtonSegment(
-                              value: 'VOICE',
-                              icon: Icon(Icons.volume_up_outlined, size: 18),
-                              label: Text('Kênh Thoại'),
-                            ),
-                          ],
-                          selected: {selectedType},
-                          onSelectionChanged: (val) {
-                            setDialogState(() {
-                              selectedType = val.first;
-                            });
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                      ],
-                      TextField(
-                        controller: nameCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Tên kênh',
-                          hintText: 'Ví dụ: chat-chung, góc-fanart',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: topicCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Chủ đề / Mô tả kênh',
-                          hintText: 'Giới thiệu ngắn về mục đích của kênh',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (selectedType == 'TEXT') ...[
-                        SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text(
-                            'Kênh thông báo một chiều',
-                            style: TextStyle(color: Colors.white, fontSize: 14),
-                          ),
-                          subtitle: const Text(
-                            'Chỉ Chủ Fandom và Ban quản trị được phép gửi tin nhắn',
-                            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                          ),
-                          value: isAnnouncement,
-                          onChanged: (val) {
-                            setDialogState(() => isAnnouncement = val);
-                          },
-                        ),
-                        const SizedBox(height: 8),
                         TextField(
-                          controller: slowModeCtrl,
-                          keyboardType: TextInputType.number,
+                          controller: topicCtrl,
+                          style: const TextStyle(color: Colors.white),
                           decoration: const InputDecoration(
-                            labelText: 'Giới hạn tốc độ nhắn tin (Slow-mode giây)',
-                            hintText: '0 = Không giới hạn',
+                            labelText: 'Chủ đề / Mô tả kênh',
+                            hintText: 'Giới thiệu ngắn về mục đích của kênh',
                           ),
                         ),
-                      ] else ...[
+                        const SizedBox(height: 12),
+                        if (selectedType == 'TEXT') ...[
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text(
+                              'Kênh thông báo một chiều',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                              ),
+                            ),
+                            subtitle: const Text(
+                              'Chỉ Chủ Fandom và Ban quản trị được phép gửi tin nhắn',
+                              style: TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 12,
+                              ),
+                            ),
+                            value: isAnnouncement,
+                            onChanged: (val) {
+                              setDialogState(() => isAnnouncement = val);
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: slowModeCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText:
+                                  'Giới hạn tốc độ nhắn tin (Slow-mode giây)',
+                              hintText: '0 = Không giới hạn',
+                            ),
+                          ),
+                        ] else ...[
                         DropdownButtonFormField<String>(
                           initialValue: voiceRoomType,
                           decoration: const InputDecoration(
@@ -250,7 +534,9 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                             ),
                             DropdownMenuItem(
                               value: 'STAGE_ROOM',
-                              child: Text('Sân khấu phát biểu (Stage Room - Giơ tay)'),
+                              child: Text(
+                                'Sân khấu phát biểu (Stage Room - Giơ tay)',
+                              ),
                             ),
                           ],
                           onChanged: (val) {
@@ -266,7 +552,8 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
+                  onPressed:
+                      isSubmitting ? null : () => Navigator.of(ctx).pop(),
                   child: const Text('Hủy'),
                 ),
                 ElevatedButton(
@@ -280,7 +567,8 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                             });
                             return;
                           }
-                          final slowSec = int.tryParse(slowModeCtrl.text.trim()) ?? 0;
+                          final slowSec =
+                              int.tryParse(slowModeCtrl.text.trim()) ?? 0;
 
                           setDialogState(() {
                             isSubmitting = true;
@@ -297,12 +585,14 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                                   'topic': topicCtrl.text.trim().isEmpty
                                       ? null
                                       : topicCtrl.text.trim(),
-                                  'is_announcement':
-                                      selectedType == 'TEXT' ? isAnnouncement : false,
+                                  'is_announcement': selectedType == 'TEXT'
+                                      ? isAnnouncement
+                                      : false,
                                   'slow_mode_seconds':
                                       selectedType == 'TEXT' ? slowSec : 0,
-                                  'voice_room_type':
-                                      selectedType == 'VOICE' ? voiceRoomType : null,
+                                  'voice_room_type': selectedType == 'VOICE'
+                                      ? voiceRoomType
+                                      : null,
                                 },
                               );
                               final created = ChannelModel.fromJson(
@@ -318,12 +608,14 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                                 data: {
                                   'name': trimmedName,
                                   'topic': topicCtrl.text.trim(),
-                                  'is_announcement':
-                                      selectedType == 'TEXT' ? isAnnouncement : null,
+                                  'is_announcement': selectedType == 'TEXT'
+                                      ? isAnnouncement
+                                      : null,
                                   'slow_mode_seconds':
                                       selectedType == 'TEXT' ? slowSec : null,
-                                  'voice_room_type':
-                                      selectedType == 'VOICE' ? voiceRoomType : null,
+                                  'voice_room_type': selectedType == 'VOICE'
+                                      ? voiceRoomType
+                                      : null,
                                 },
                               );
                               final updated = ChannelModel.fromJson(
@@ -349,6 +641,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
               ],
             );
           },
+          ),
         );
       },
     );
@@ -357,35 +650,38 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
   Future<void> _confirmDeleteChannel(ChannelModel channel) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text(
-          'Xác nhận xóa kênh',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: Text(
-          'Bạn có chắc chắn muốn xóa kênh "${channel.name}" không? Hành động này không thể hoàn tác.',
-          style: const TextStyle(color: AppTheme.textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Hủy'),
+      builder: (ctx) => Theme(
+        data: AppTheme.darkTheme,
+        child: AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text(
+            'Xác nhận xóa kênh',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Xóa kênh'),
+          content: Text(
+            'Bạn có chắc chắn muốn xóa kênh "${channel.name}" không? Hành động này không thể hoàn tác.',
+            style: const TextStyle(color: AppTheme.textSecondary),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Xóa kênh'),
+            ),
+          ],
+        ),
       ),
     );
 
     if (confirmed != true || !mounted) return;
 
     try {
-      await _api.dio.delete('/api/v1/fandoms/${widget.slug}/channels/${channel.id}');
-
+      await _api.dio
+          .delete('/api/v1/fandoms/${widget.slug}/channels/${channel.id}');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Đã xóa kênh "${channel.name}".')),
@@ -419,35 +715,42 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
     }
 
     if (_errorMessage != null || _fandom == null || _channelsData == null) {
-      return Scaffold(
-        backgroundColor: AppTheme.background,
-        appBar: AppBar(
-          title: const Text('Không gian Fandom'),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => context.go('/fandoms/${widget.slug}'),
+      return Theme(
+        data: AppTheme.darkTheme,
+        child: Scaffold(
+          backgroundColor: AppTheme.background,
+          appBar: AppBar(
+            title: const Text('Không gian Fandom'),
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => context.go('/fandoms/${widget.slug}'),
+            ),
           ),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.lock_outline, size: 56, color: AppTheme.error),
-                const SizedBox(height: 16),
-                Text(
-                  _errorMessage ?? 'Không thể tải dữ liệu Fandom.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton.icon(
-                  onPressed: () => context.go('/fandoms/${widget.slug}'),
-                  icon: const Icon(Icons.arrow_back),
-                  label: const Text('Quay lại trang thông tin Fandom'),
-                ),
-              ],
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.lock_outline,
+                    size: 56,
+                    color: AppTheme.error,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _errorMessage ?? 'Không thể tải dữ liệu Fandom.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: () => context.go('/fandoms/${widget.slug}'),
+                    icon: const Icon(Icons.arrow_back),
+                    label: const Text('Quay lại trang thông tin Fandom'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -457,31 +760,38 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
     final isWide = MediaQuery.of(context).size.width >= 760;
     final sidebar = _buildSidebar(isDrawer: !isWide);
 
-
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      appBar: isWide
-          ? null
-          : AppBar(
-              backgroundColor: AppTheme.surface,
-              title: Text(
-                _fandom!.name,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              actions: [
-                TextButton.icon(
-                  onPressed: () => context.go('/fandoms/${widget.slug}'),
-                  icon: const Icon(Icons.exit_to_app, size: 18),
-                  label: const Text('Trang bìa'),
+    return Theme(
+      data: AppTheme.darkTheme,
+      child: Scaffold(
+        backgroundColor: AppTheme.background,
+        appBar: isWide
+            ? null
+            : AppBar(
+                backgroundColor: AppTheme.surface,
+                title: Text(
+                  _fandom!.name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ],
-            ),
-      drawer: isWide ? null : Drawer(backgroundColor: AppTheme.surface, child: sidebar),
-      body: Row(
-        children: [
-          if (isWide) SizedBox(width: 280, child: sidebar),
-          Expanded(child: _buildMainContent()),
-        ],
+                actions: [
+                  TextButton.icon(
+                    onPressed: () => context.go('/fandoms/${widget.slug}'),
+                    icon: const Icon(Icons.exit_to_app, size: 18),
+                    label: const Text('Trang bìa'),
+                  ),
+                ],
+              ),
+        drawer: isWide
+            ? null
+            : Drawer(backgroundColor: AppTheme.surface, child: sidebar),
+        body: Row(
+          children: [
+            if (isWide) SizedBox(width: 280, child: sidebar),
+            Expanded(child: _buildMainContent()),
+          ],
+        ),
       ),
     );
   }
@@ -510,7 +820,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Fandom Workspace Header
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: const BoxDecoration(
@@ -573,11 +882,10 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                 ],
               ),
             ),
-
-            // Navigation items
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+                padding:
+                    const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
                 children: [
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -622,7 +930,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                       if (isDrawer) Navigator.of(context).pop();
                     },
                   ),
-
                   const SizedBox(height: 16),
                   if (channelsData.canManageChannels)
                     Padding(
@@ -638,7 +945,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                         label: const Text('Tạo kênh mới'),
                       ),
                     ),
-
                   if (announcementChannels.isNotEmpty) ...[
                     const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -656,7 +962,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                       _buildChannelTile(ch, isDrawer: isDrawer),
                     const SizedBox(height: 12),
                   ],
-
                   if (textChannels.isNotEmpty) ...[
                     const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -674,7 +979,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                       _buildChannelTile(ch, isDrawer: isDrawer),
                     const SizedBox(height: 12),
                   ],
-
                   if (voiceChannels.isNotEmpty) ...[
                     const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -739,7 +1043,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                 ),
                 ?trailing,
               ],
-
             ),
           ),
         ),
@@ -767,7 +1070,11 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
       label: channel.name,
       selected: isSelected,
       trailing: channel.slowModeSeconds > 0
-          ? const Icon(Icons.timer_outlined, size: 14, color: AppTheme.textSecondary)
+          ? const Icon(
+              Icons.timer_outlined,
+              size: 14,
+              color: AppTheme.textSecondary,
+            )
           : null,
       onTap: () {
         _selectChannel(channel);
@@ -805,7 +1112,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Welcome Banner Card
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
@@ -880,7 +1186,8 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                         if (firstTextChannel != null)
                           OutlinedButton.icon(
                             onPressed: () => _selectChannel(firstTextChannel),
-                            icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                            icon:
+                                const Icon(Icons.chat_bubble_outline, size: 18),
                             label: Text('Vào #${firstTextChannel.name}'),
                           ),
                       ],
@@ -889,8 +1196,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-
-              // Community Stats & Structure Overview
               const Text(
                 'Cấu trúc Không gian Fandom',
                 style: TextStyle(
@@ -1027,7 +1332,8 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                     border: Border.all(color: AppTheme.surfaceLight),
                   ),
                   child: Text(
-                    (fandom.rulesTos != null && fandom.rulesTos!.trim().isNotEmpty)
+                    (fandom.rulesTos != null &&
+                            fandom.rulesTos!.trim().isNotEmpty)
                         ? fandom.rulesTos!
                         : '1. Tôn trọng Chủ Fandom và toàn bộ thành viên trong cộng đồng.\n'
                             '2. Không gửi tin nhắn rác (spam), quảng cáo hoặc nội dung vi phạm pháp luật.\n'
@@ -1053,7 +1359,9 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                           });
                         },
                         icon: const Icon(Icons.check_circle_outline, size: 18),
-                        label: const Text('Tôi đã đọc và đồng ý tuân thủ nội quy'),
+                        label: const Text(
+                          'Tôi đã đọc và đồng ý tuân thủ nội quy',
+                        ),
                       )
                     else ...[
                       Container(
@@ -1094,7 +1402,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
                     ],
                   ],
                 ),
-
               ],
             ),
           ),
@@ -1109,7 +1416,6 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
 
     return Column(
       children: [
-        // Channel Header Bar
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           decoration: const BoxDecoration(
@@ -1203,57 +1509,209 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
             ],
           ),
         ),
-
-        // Channel Body
         Expanded(
           child: channel.type == 'VOICE'
               ? _buildVoiceChannelBody(channel)
               : _buildTextChannelBody(channel),
         ),
-
-        // Channel Bottom Composer / Status Bar for TEXT channels
         if (channel.type == 'TEXT') _buildTextChannelFooter(channel),
       ],
     );
   }
 
   Widget _buildTextChannelBody(ChannelModel channel) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircleAvatar(
-              radius: 32,
-              backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
-              child: Icon(
-                channel.isAnnouncement ? Icons.campaign_outlined : Icons.tag,
-                size: 34,
-                color: AppTheme.primary,
+    final messages = _messagesByChannel[channel.id] ?? const [];
+    final hasMore = _hasMoreByChannel[channel.id] == true;
+    final nextCursor = _nextCursorByChannel[channel.id];
+
+    if (_isLoadingMessages && messages.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (messages.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 32,
+                backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
+                child: Icon(
+                  channel.isAnnouncement ? Icons.campaign_outlined : Icons.tag,
+                  size: 34,
+                  color: AppTheme.primary,
+                ),
               ),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              'Chào mừng bạn đến với kênh #${channel.name}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+              const SizedBox(height: 14),
+              Text(
+                'Chào mừng bạn đến với kênh #${channel.name}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              channel.topic ??
-                  'Đây là điểm khởi đầu của kênh #${channel.name}.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 14,
+              const SizedBox(height: 6),
+              Text(
+                channel.topic ??
+                    'Đây là điểm khởi đầu của kênh #${channel.name}. Hãy gửi tin nhắn đầu tiên!',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 14,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+      );
+    }
+
+    return ListView.builder(
+      controller: _messageScrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      itemCount: messages.length + (hasMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (hasMore && index == 0) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: OutlinedButton.icon(
+                onPressed: _isLoadingMessages
+                    ? null
+                    : () => _fetchChannelMessages(
+                          channel.id,
+                          beforeId: nextCursor,
+                        ),
+                icon: const Icon(Icons.history, size: 16),
+                label: const Text('Tải thêm tin nhắn cũ'),
+              ),
+            ),
+          );
+        }
+        final msgIndex = hasMore ? index - 1 : index;
+        return _buildMessageItem(messages[msgIndex]);
+      },
+    );
+  }
+
+  Widget _buildMessageItem(MessageModel message) {
+    final sender = message.sender;
+    final timeStr =
+        '${message.createdAt.toLocal().hour.toString().padLeft(2, '0')}:${message.createdAt.toLocal().minute.toString().padLeft(2, '0')}';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 19,
+            backgroundColor: AppTheme.primary.withValues(alpha: 0.2),
+            backgroundImage: sender.avatarUrl != null
+                ? NetworkImage(sender.avatarUrl!)
+                : null,
+            child: sender.avatarUrl == null
+                ? Text(
+                    sender.displayName.characters.first.toUpperCase(),
+                    style: const TextStyle(
+                      color: AppTheme.primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  )
+                : null,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      sender.displayName,
+                      style: TextStyle(
+                        color: sender.isOwner ? AppTheme.primary : Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    if (sender.isOwner)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Chủ Fandom',
+                          style: TextStyle(
+                            color: AppTheme.primary,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    Text(
+                      timeStr,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+                if (message.content.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    message.content,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+                if (message.attachments.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final att in message.attachments)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Image.network(
+                            att.url,
+                            height: 160,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              padding: const EdgeInsets.all(12),
+                              color: AppTheme.surfaceLight,
+                              child: Text(
+                                att.filename ?? att.url,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1304,41 +1762,138 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           top: BorderSide(color: AppTheme.surfaceLight, width: 1),
         ),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (channel.canAttachFiles)
-            IconButton(
-              tooltip: 'Đính kèm hình ảnh',
-              icon: const Icon(
-                Icons.add_photo_alternate_outlined,
-                color: AppTheme.textSecondary,
+          if (_pendingAttachments.isNotEmpty) ...[
+            SizedBox(
+              height: 64,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _pendingAttachments.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, idx) {
+                  final item = _pendingAttachments[idx];
+                  return Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          item.url,
+                          width: 64,
+                          height: 64,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _pendingAttachments.removeAt(idx);
+                            });
+                          },
+                          child: Container(
+                            decoration: const BoxDecoration(
+                              color: Colors.black87,
+                              shape: BoxShape.circle,
+                            ),
+                            padding: const EdgeInsets.all(2),
+                            child: const Icon(
+                              Icons.close,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
-              onPressed: () {},
             ),
-          Expanded(
-            child: TextField(
-              key: const Key('channel_message_input'),
-              controller: _messageController,
-              decoration: InputDecoration(
-                hintText: 'Nhắn tin tới #${channel.name}...',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+            const SizedBox(height: 8),
+          ],
+          Row(
+            children: [
+              if (channel.canAttachFiles)
+                IconButton(
+                  tooltip: 'Đính kèm hình ảnh',
+                  icon: _isUploadingAttachment
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(
+                          Icons.add_photo_alternate_outlined,
+                          color: AppTheme.textSecondary,
+                        ),
+                  onPressed: _isUploadingAttachment
+                      ? null
+                      : _handlePickAndUploadAttachment,
                 ),
-                filled: true,
-                fillColor: AppTheme.background,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+              Expanded(
+                child: TextField(
+                  key: const Key('channel_message_input'),
+                  controller: _messageController,
+                  cursorColor: AppTheme.primary,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                  ),
+                  onSubmitted: (_) => _handleSendMessage(channel),
+                  decoration: InputDecoration(
+                    hintText: 'Nhắn tin tới #${channel.name}...',
+                    hintStyle: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 14,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(
+                        color: AppTheme.surfaceLight,
+                        width: 1,
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(
+                        color: AppTheme.primary,
+                        width: 1.5,
+                      ),
+                    ),
+                    filled: true,
+                    fillColor: AppTheme.surfaceLight,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            tooltip: 'Gửi tin nhắn',
-            icon: const Icon(Icons.send_rounded, color: AppTheme.primary),
-            onPressed: () {},
+              const SizedBox(width: 8),
+              IconButton(
+                key: const Key('channel_send_button'),
+                tooltip: 'Gửi tin nhắn',
+                icon: _isSendingMessage
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send_rounded, color: AppTheme.primary),
+                onPressed: _isSendingMessage
+                    ? null
+                    : () => _handleSendMessage(channel),
+              ),
+            ],
           ),
         ],
       ),

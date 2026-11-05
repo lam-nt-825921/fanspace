@@ -11,7 +11,13 @@ import '../profile/user_card_dialog.dart';
 
 class FandomDetailScreen extends StatefulWidget {
   final String slug;
-  const FandomDetailScreen({super.key, required this.slug});
+  final FandomDetailModel? initialFandom;
+
+  const FandomDetailScreen({
+    super.key,
+    required this.slug,
+    this.initialFandom,
+  });
 
   @override
   State<FandomDetailScreen> createState() => _FandomDetailScreenState();
@@ -25,7 +31,12 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _loadFandom();
+    if (widget.initialFandom != null) {
+      _fandom = widget.initialFandom;
+      _isLoading = false;
+    } else {
+      _loadFandom();
+    }
   }
 
   Future<void> _loadFandom() async {
@@ -285,7 +296,20 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
 
     if (_fandom == null) {
       return Scaffold(
-        appBar: AppBar(),
+        appBar: AppBar(
+          leading: IconButton(
+            key: const Key('fandom_detail_back_button'),
+            tooltip: 'Quay lại trang chủ',
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/');
+              }
+            },
+          ),
+        ),
         body: const Center(
           child: Text('Không tìm thấy thông tin Fandom.'),
         ),
@@ -301,6 +325,28 @@ class _FandomDetailScreenState extends State<FandomDetailScreen> {
           SliverAppBar(
             expandedHeight: 220,
             pinned: true,
+            leading: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: CircleAvatar(
+                backgroundColor: Colors.black54,
+                child: IconButton(
+                  key: const Key('fandom_detail_back_button'),
+                  tooltip: 'Quay lại trang chủ',
+                  icon: const Icon(
+                    Icons.arrow_back,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go('/');
+                    }
+                  },
+                ),
+              ),
+            ),
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,

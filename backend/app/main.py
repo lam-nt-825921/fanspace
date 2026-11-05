@@ -17,8 +17,9 @@ from app.core.database import engine, init_db
 from app.core.redis import redis_client
 from app.modules.identity.router import auth_router, users_router
 from app.modules.fandom.router import fandom_router
-from app.modules.chat.router import chat_router
+from app.modules.chat.router import chat_router, messages_router
 from app.modules.media.router import media_router
+
 
 
 settings = get_settings()
@@ -109,8 +110,8 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(fandom_router)
 app.include_router(chat_router)
+app.include_router(messages_router)
 app.include_router(media_router)
-
 
 
 @app.get(
@@ -171,6 +172,83 @@ async def connect(sid: str, environ: dict, auth: dict | None = None) -> bool:
 
 
 @sio.event
+async def join_channel(sid: str, data: dict) -> dict:
+    """Subscribes a connected socket client to a channel real-time broadcast room.
+
+    Args:
+        sid: Socket connection ID.
+        data: Payload containing `channel_id`.
+
+    Returns:
+        dict: Acknowledgment payload.
+    """
+    channel_id = data.get("channel_id") if isinstance(data, dict) else None
+    if not channel_id:
+        return {"ok": False, "error": "Thiếu mã định danh kênh."}
+    await sio.enter_room(sid, f"channel:{channel_id}")
+    return {"ok": True, "room": f"channel:{channel_id}"}
+
+
+@sio.event
+async def leave_channel(sid: str, data: dict) -> dict:
+    """Unsubscribes a connected socket client from a channel broadcast room.
+
+    Args:
+        sid: Socket connection ID.
+        data: Payload containing `channel_id`.
+
+    Returns:
+        dict: Acknowledgment payload.
+    """
+    channel_id = data.get("channel_id") if isinstance(data, dict) else None
+    if channel_id:
+        await sio.leave_room(sid, f"channel:{channel_id}")
+    return {"ok": True}
+
+
+@sio.event
+async def typing_start(sid: str, data: dict) -> None:
+    """Broadcasts typing indicator state to other members in the channel room.
+
+    Args:
+        sid: Socket connection ID.
+        data: Payload containing `channel_id` and `display_name`.
+    """
+    if not isinstance(data, dict):
+        return
+    channel_id = data.get("channel_id")
+    display_name = data.get("display_name")
+    if channel_id and display_name:
+        await sio.emit(
+            "user_typing",
+            {"channel_id": channel_id, "display_name": display_name, "is_typing": True},
+            room=f"channel:{channel_id}",
+            skip_sid=sid,
+        )
+
+
+@sio.event
+async def typing_stop(sid: str, data: dict) -> None:
+    """Broadcasts typing stop state to other members in the channel room.
+
+    Args:
+        sid: Socket connection ID.
+        data: Payload containing `channel_id` and `display_name`.
+    """
+    if not isinstance(data, dict):
+        return
+    channel_id = data.get("channel_id")
+    display_name = data.get("display_name")
+    if channel_id and display_name:
+        await sio.emit(
+            "user_typing",
+            {"channel_id": channel_id, "display_name": display_name, "is_typing": False},
+            room=f"channel:{channel_id}",
+            skip_sid=sid,
+        )
+
+
+@sio.event
 async def disconnect(sid: str) -> None:
     """Socket.IO disconnection cleanup event handler.
 
@@ -182,3 +260,4 @@ async def disconnect(sid: str) -> None:
 
 # Wrap FastAPI with Socket.IO ASGI app
 socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
+

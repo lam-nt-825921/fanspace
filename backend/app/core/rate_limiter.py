@@ -6,6 +6,7 @@ exponential lockout on login attempts to defend against credential-stuffing
 and brute-force attacks.
 """
 
+import hashlib
 import redis.asyncio as aioredis
 from fastapi import HTTPException, status
 from app.core.config import get_settings
@@ -17,21 +18,33 @@ class RateLimiter:
     """Provides static utility methods for Redis-backed rate limiting."""
 
     @staticmethod
-    async def check_register_limit(redis: aioredis.Redis, ip_address: str) -> None:
-        """Enforces IP-based rate limiting on new account registrations.
+    async def check_register_limit(
+        redis: aioredis.Redis,
+        ip_address: str,
+        client_fingerprint: str | None = None,
+    ) -> None:
+        """Enforces rate limiting on new account registrations without blocking shared Wi-Fi NAT IPs.
 
-        Tracks the registration count per IP in Redis with a rolling TTL.
-        Rejects requests exceeding `settings.REGISTER_RATE_LIMIT_MAX` within
-        `settings.REGISTER_RATE_LIMIT_WINDOW` seconds.
+        When `client_fingerprint` (device ID or User-Agent) is provided, tracks the quota per
+        `(ip_address, fingerprint_hash)` bucket so distinct devices on the same Wi-Fi network
+        are isolated from each other.
 
         Args:
             redis (aioredis.Redis): Active asynchronous Redis connection.
             ip_address (str): Client IP address being evaluated.
+            client_fingerprint (str | None): Optional device identifier or User-Agent string.
 
         Raises:
             HTTPException: 429 Too Many Requests if the registration limit is exceeded.
         """
-        key = f"ratelimit:register:ip:{ip_address}"
+        if client_fingerprint and client_fingerprint.strip():
+            fp_digest = hashlib.sha256(
+                client_fingerprint.strip().encode("utf-8")
+            ).hexdigest()[:16]
+            key = f"ratelimit:register:ip:{ip_address}:{fp_digest}"
+        else:
+            key = f"ratelimit:register:ip:{ip_address}"
+
         current = await redis.incr(key)
         if current == 1:
             await redis.expire(key, settings.REGISTER_RATE_LIMIT_WINDOW)
@@ -39,7 +52,7 @@ class RateLimiter:
             ttl = await redis.ttl(key)
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Địa chỉ IP của bạn đã đăng ký quá số lần cho phép ({settings.REGISTER_RATE_LIMIT_MAX} lần). Vui lòng thử lại sau {max(ttl, 1)} giây.",
+                detail=f"Thiết bị của bạn đã đăng ký quá số lần cho phép ({settings.REGISTER_RATE_LIMIT_MAX} lần). Vui lòng thử lại sau {max(ttl, 1)} giây.",
             )
 
     @staticmethod
