@@ -198,8 +198,31 @@ class FandomJoinRequestReview(BaseModel):
     action: str = Field(..., pattern=r"^(APPROVE|REJECT)$", description="Hành động: 'APPROVE' hoặc 'REJECT'")
 
 
+MAX_FANDOMS_PER_OWNER: int = 5
+
+
+class FandomVisibilityUpdate(BaseModel):
+    """Payload for updating public visibility of a fandom space."""
+    is_public: bool = Field(..., description="Trạng thái hiển thị công khai (True) hoặc riêng tư (False)")
+
+
+class FandomDeleteRequest(BaseModel):
+    """Payload for confirming deletion of a fandom community."""
+    password: str | None = Field(None, description="Mật khẩu xác nhận của Chủ sở hữu")
+    otp: str | None = Field(None, description="Mã OTP xác nhận gửi về email (đối với tài khoản chưa thiết lập mật khẩu)")
+
+
+class FandomDeleteResponse(BaseModel):
+    """Response returned upon successfully deleting a fandom space."""
+    success: bool = Field(default=True, description="Trạng thái thực thi")
+    message: str = Field(..., description="Thông báo kết quả")
+    fandom_id: uuid.UUID = Field(..., description="ID định danh của fandom vừa bị xóa")
+
+
 class MyFandomsResponse(BaseModel):
     """Comprehensive aggregation of current user's fandom participations."""
     joined: list[FandomSummary] = Field(default_factory=list, description="Danh sách Fandom người dùng đang là thành viên")
     managed: list[FandomSummary] = Field(default_factory=list, description="Danh sách Fandom người dùng đang làm Chủ sở hữu")
     pending_requests: list[FandomJoinRequestOut] = Field(default_factory=list, description="Danh sách đơn xin gia nhập đang chờ duyệt")
+    quota_used: int = Field(default=0, description="Số lượng Fandom người dùng đang sở hữu")
+    max_quota: int = Field(default=MAX_FANDOMS_PER_OWNER, description="Giới hạn số Fandom tối đa được sở hữu cùng lúc")

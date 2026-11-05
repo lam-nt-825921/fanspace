@@ -17,14 +17,19 @@ from sqlalchemy import String, asc, cast, desc, func, or_, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, selectinload
 
+from app.core.security import verify_password
 from app.modules.identity.models import User
 from app.modules.fandom.models import Fandom, FandomMember, FandomInvite, FandomJoinRequest
 from app.modules.rbac.models import Role, MemberRole, PermissionBit
 from app.modules.fandom.schemas import (
+    MAX_FANDOMS_PER_OWNER,
     FandomCreate,
     FandomDetail,
+    FandomDeleteRequest,
+    FandomDeleteResponse,
     FandomSortBy,
     FandomSummary,
+    FandomVisibilityUpdate,
     FandomJoinResponse,
     FandomLeaveResponse,
     FandomCancelRequestResponse,
@@ -123,6 +128,15 @@ class FandomService:
         Raises:
             HTTPException: 400 Bad Request if the slug is already registered or media limits are exceeded.
         """
+        # 0. Check fandom ownership quota
+        owned_count_query = select(func.count(Fandom.id)).where(Fandom.owner_id == owner.id)
+        owned_count = (await db.execute(owned_count_query)).scalar_one() or 0
+        if owned_count >= MAX_FANDOMS_PER_OWNER:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Bạn đã đạt giới hạn tối đa {MAX_FANDOMS_PER_OWNER} Fandom sở hữu. Vui lòng xóa bớt Fandom không dùng để tạo mới.",
+            )
+
         clean_slug = data.slug.strip().lower()
         validated_illustrations = MediaService.validate_illustration_urls(data.illustration_urls)
 
@@ -1069,4 +1083,117 @@ class FandomService:
             joined=joined_summaries,
             managed=managed_summaries,
             pending_requests=pending_summaries,
+            quota_used=len(managed_summaries),
+            max_quota=MAX_FANDOMS_PER_OWNER,
         )
+
+    @classmethod
+    async def update_fandom_visibility(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        data: FandomVisibilityUpdate,
+        redis: aioredis.Redis | None = None,
+    ) -> FandomDetail:
+        """Toggles the public or private visibility mode of a fandom community.
+
+        Args:
+            db (AsyncSession): Active database session.
+            identifier (str): Fandom UUID or unique slug.
+            current_user (User): Authenticated user requesting the update.
+            data (FandomVisibilityUpdate): Desired visibility status.
+            redis (aioredis.Redis | None): Optional Redis client for cache eviction.
+
+        Returns:
+            FandomDetail: Refreshed fandom profile detail.
+
+        Raises:
+            HTTPException: 403 Forbidden if the requester is not the Fandom Owner.
+            HTTPException: 404 Not Found if the fandom does not exist.
+        """
+        fandom = await cls._resolve_fandom(db, identifier)
+        if fandom.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chỉ Chủ sở hữu (Owner) mới có quyền thay đổi trạng thái hiển thị của Fandom.",
+            )
+
+        fandom.is_public = data.is_public
+        await db.commit()
+        await db.refresh(fandom)
+
+        await cls.invalidate_fandom_caches(redis, slug=fandom.slug)
+        if redis:
+            await redis.delete(f"cache:user:fandoms:{current_user.id}")
+
+        return await cls.get_preview(db, fandom.slug, current_user=current_user, redis=redis)
+
+    @classmethod
+    async def delete_fandom(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        data: FandomDeleteRequest,
+        redis: aioredis.Redis | None = None,
+    ) -> FandomDeleteResponse:
+        """Permanently deletes a fandom space and cascades removal of all associated data.
+
+        Args:
+            db (AsyncSession): Active database session.
+            identifier (str): Fandom UUID or unique slug.
+            current_user (User): Authenticated user requesting deletion.
+            data (FandomDeleteRequest): Confirmation credentials (password or OTP).
+            redis (aioredis.Redis | None): Optional Redis client for cache eviction.
+
+        Returns:
+            FandomDeleteResponse: Deletion confirmation response.
+
+        Raises:
+            HTTPException: 400 Bad Request if confirmation password or OTP is invalid.
+            HTTPException: 403 Forbidden if requester is not the Owner.
+            HTTPException: 404 Not Found if the fandom does not exist.
+        """
+        fandom = await cls._resolve_fandom(db, identifier)
+        if fandom.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chỉ Chủ sở hữu (Owner) mới có quyền xóa Fandom này.",
+            )
+
+        # 1. Verify owner's identity with password or OTP
+        if current_user.password_hash:
+            if not data.password or not verify_password(data.password, current_user.password_hash):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Mật khẩu xác nhận không chính xác.",
+                )
+        else:
+            if not data.otp:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Tài khoản chưa cài mật khẩu cần cung cấp mã OTP để xác nhận xóa Fandom.",
+                )
+            from app.modules.identity.service import OTPService, OTPPurpose
+            await OTPService.verify_otp(redis, current_user.email, data.otp, OTPPurpose.DELETE_ACCOUNT)
+
+        fandom_id = fandom.id
+        fandom_name = fandom.name
+        fandom_slug = fandom.slug
+
+        # 2. Delete fandom record (SQLAlchemy cascade deletes channels, messages, roles, members, invites)
+        await db.delete(fandom)
+        await db.commit()
+
+        # 3. Invalidate Redis caches
+        await cls.invalidate_fandom_caches(redis, slug=fandom_slug)
+        if redis:
+            await redis.delete(f"cache:user:fandoms:{current_user.id}")
+
+        return FandomDeleteResponse(
+            success=True,
+            message=f"Không gian Fandom '{fandom_name}' đã được xóa vĩnh viễn thành công.",
+            fandom_id=fandom_id,
+        )
+
