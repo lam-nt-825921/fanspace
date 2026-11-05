@@ -130,3 +130,7 @@ async def init_db() -> None:
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_users_username_trgm ON users USING gin (lower(username) gin_trgm_ops);")
         )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_channels_fandom_position ON channels (fandom_id, position ASC, created_at ASC);")
+        )
+

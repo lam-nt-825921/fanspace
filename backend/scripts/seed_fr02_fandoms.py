@@ -444,7 +444,12 @@ async def main() -> None:
                     status="ACTIVE",
                 )
                 db.add(membership)
+
+                from app.modules.chat.service import ChannelService
+
+                db.add_all(ChannelService.build_default_channels(fandom.id))
                 await db.commit()
+
 
             print(f"   ✨ Fandom '{fandom_info['name']}' đã được lưu thành công!")
             seeded_fandoms.append(

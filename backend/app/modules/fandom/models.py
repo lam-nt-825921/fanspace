@@ -45,6 +45,8 @@ class Fandom(Base):
     roles = relationship("Role", back_populates="fandom", cascade="all, delete-orphan")
     invites = relationship("FandomInvite", back_populates="fandom", cascade="all, delete-orphan")
     join_requests = relationship("FandomJoinRequest", back_populates="fandom", cascade="all, delete-orphan")
+    channels = relationship("Channel", back_populates="fandom", cascade="all, delete-orphan")
+
 
 
 class FandomMember(Base):

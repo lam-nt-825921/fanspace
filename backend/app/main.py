@@ -17,7 +17,9 @@ from app.core.database import engine, init_db
 from app.core.redis import redis_client
 from app.modules.identity.router import auth_router, users_router
 from app.modules.fandom.router import fandom_router
+from app.modules.chat.router import chat_router
 from app.modules.media.router import media_router
+
 
 settings = get_settings()
 
@@ -106,7 +108,9 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(fandom_router)
+app.include_router(chat_router)
 app.include_router(media_router)
+
 
 
 @app.get(
