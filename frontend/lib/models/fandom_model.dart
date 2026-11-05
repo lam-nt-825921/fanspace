@@ -121,6 +121,52 @@ class FandomDetailModel {
           : null,
     );
   }
+
+  FandomDetailModel copyWith({
+    String? id,
+    String? name,
+    String? slug,
+    String? description,
+    String? category,
+    String? avatarUrl,
+    String? bannerUrl,
+    List<String>? illustrationUrls,
+    String? admissionMode,
+    bool? isPublic,
+    String? rulesTos,
+    int? memberCount,
+    String? ownerId,
+    String? ownerName,
+    String? ownerUsername,
+    String? ownerAvatarUrl,
+    bool? isOwner,
+    bool? isMember,
+    bool? isPendingRequest,
+    DateTime? createdAt,
+  }) {
+    return FandomDetailModel(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      slug: slug ?? this.slug,
+      description: description ?? this.description,
+      category: category ?? this.category,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      bannerUrl: bannerUrl ?? this.bannerUrl,
+      illustrationUrls: illustrationUrls ?? this.illustrationUrls,
+      admissionMode: admissionMode ?? this.admissionMode,
+      isPublic: isPublic ?? this.isPublic,
+      rulesTos: rulesTos ?? this.rulesTos,
+      memberCount: memberCount ?? this.memberCount,
+      ownerId: ownerId ?? this.ownerId,
+      ownerName: ownerName ?? this.ownerName,
+      ownerUsername: ownerUsername ?? this.ownerUsername,
+      ownerAvatarUrl: ownerAvatarUrl ?? this.ownerAvatarUrl,
+      isOwner: isOwner ?? this.isOwner,
+      isMember: isMember ?? this.isMember,
+      isPendingRequest: isPendingRequest ?? this.isPendingRequest,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 }
 
 class FandomJoinRequestItemModel {
@@ -178,11 +224,15 @@ class MyFandomsDataModel {
   final List<FandomSummaryModel> joined;
   final List<FandomSummaryModel> managed;
   final List<FandomJoinRequestItemModel> pendingRequests;
+  final int quotaUsed;
+  final int maxQuota;
 
   MyFandomsDataModel({
     this.joined = const [],
     this.managed = const [],
     this.pendingRequests = const [],
+    this.quotaUsed = 0,
+    this.maxQuota = 5,
   });
 
   /// All fandoms the user participates in (owned + joined)
@@ -191,21 +241,29 @@ class MyFandomsDataModel {
   /// Checks if the current user is the owner of a given fandom ID
   bool isOwner(String fandomId) => managed.any((f) => f.id == fandomId);
 
+  /// Checks if the user has reached the maximum fandom creation quota
+  bool get isQuotaReached => quotaUsed >= maxQuota;
+
   factory MyFandomsDataModel.fromJson(Map<String, dynamic> json) {
     final rawJoined = json['joined'];
     final rawManaged = json['managed'];
     final rawPending = json['pending_requests'];
 
+    final managedList = rawManaged is List
+        ? rawManaged.map((e) => FandomSummaryModel.fromJson(e)).toList()
+        : const <FandomSummaryModel>[];
+
     return MyFandomsDataModel(
       joined: rawJoined is List
           ? rawJoined.map((e) => FandomSummaryModel.fromJson(e)).toList()
           : const [],
-      managed: rawManaged is List
-          ? rawManaged.map((e) => FandomSummaryModel.fromJson(e)).toList()
-          : const [],
+      managed: managedList,
       pendingRequests: rawPending is List
           ? rawPending.map((e) => FandomJoinRequestItemModel.fromJson(e)).toList()
           : const [],
+      quotaUsed: json['quota_used'] ?? managedList.length,
+      maxQuota: json['max_quota'] ?? 5,
     );
   }
 }
+

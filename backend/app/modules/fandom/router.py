@@ -18,8 +18,11 @@ from app.modules.fandom.schemas import (
     FandomCreate,
     FandomCreateResponse,
     FandomDetail,
+    FandomDeleteRequest,
+    FandomDeleteResponse,
     FandomSortBy,
     FandomSummary,
+    FandomVisibilityUpdate,
     FandomJoinResponse,
     FandomLeaveResponse,
     FandomCancelRequestResponse,
@@ -383,3 +386,59 @@ async def review_join_request(
         action=data.action,
         redis=redis,
     )
+
+
+@fandom_router.patch(
+    "/{identifier}/visibility",
+    response_model=FandomDetail,
+    summary="Cập nhật trạng thái hiển thị Công khai / Riêng tư của Fandom",
+    description="Cho phép Chủ sở hữu (Owner) bật hoặc tắt trạng thái công khai (is_public). Khi tắt, Fandom sẽ không xuất hiện trên danh mục khám phá công khai.",
+    responses={
+        403: {"description": "Chỉ Chủ sở hữu mới có quyền thay đổi trạng thái"},
+        404: {"description": "Không tìm thấy Fandom"},
+    },
+)
+async def update_fandom_visibility(
+    identifier: str,
+    data: FandomVisibilityUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Updates public visibility status of a fandom community."""
+    return await FandomService.update_fandom_visibility(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
+        redis=redis,
+    )
+
+
+@fandom_router.delete(
+    "/{identifier}",
+    response_model=FandomDeleteResponse,
+    summary="Xóa vĩnh viễn không gian Fandom (Chủ sở hữu)",
+    description="Xóa hoàn toàn không gian Fandom và cascade xóa tất cả các kênh, tin nhắn, vai trò và thành viên. Yêu cầu xác thực mật khẩu Chủ sở hữu.",
+    responses={
+        400: {"description": "Mật khẩu xác nhận không chính xác"},
+        403: {"description": "Chỉ Chủ sở hữu mới có quyền xóa Fandom"},
+        404: {"description": "Không tìm thấy Fandom"},
+    },
+)
+async def delete_fandom(
+    identifier: str,
+    data: FandomDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Permanently deletes a fandom space owned by current user."""
+    return await FandomService.delete_fandom(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
+        redis=redis,
+    )
+

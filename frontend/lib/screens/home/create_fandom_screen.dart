@@ -20,6 +20,15 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
 
   String _selectedCategory = 'Âm nhạc';
   String _admissionMode = 'OPEN';
+  bool _isPublic = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<FandomProvider>().fetchMyFandoms();
+    });
+  }
 
   @override
   void dispose() {
@@ -47,6 +56,7 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
         description: _descriptionController.text.trim(),
         category: _selectedCategory,
         admissionMode: _admissionMode,
+        isPublic: _isPublic,
         rulesTos: _rulesController.text.trim().isNotEmpty ? _rulesController.text.trim() : null,
       );
 
@@ -78,6 +88,10 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
         .where((c) => c != 'Tất cả')
         .toList();
 
+    final quotaUsed = fandomProvider.myFandoms?.quotaUsed ?? 0;
+    final maxQuota = fandomProvider.myFandoms?.maxQuota ?? 5;
+    final isQuotaReached = quotaUsed >= maxQuota;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Khởi tạo Fandom mới'),
@@ -101,7 +115,46 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
                     'Bạn sẽ toàn quyền quản lý, tạo vai trò, thiết lập gói hội viên và các kênh trò chuyện thời gian thực.',
                     style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+
+                  // Quota Indicator Badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isQuotaReached
+                          ? AppTheme.error.withOpacity(0.12)
+                          : AppTheme.primary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isQuotaReached
+                            ? AppTheme.error.withOpacity(0.4)
+                            : AppTheme.primary.withOpacity(0.3),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isQuotaReached ? Icons.warning_amber_rounded : Icons.pie_chart_outline,
+                          size: 20,
+                          color: isQuotaReached ? AppTheme.error : AppTheme.primary,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            isQuotaReached
+                                ? 'Hạn ngạch Fandom: $quotaUsed/$maxQuota (Đã đạt giới hạn tối đa)'
+                                : 'Hạn ngạch Fandom: $quotaUsed/$maxQuota không gian đã tạo',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: isQuotaReached ? AppTheme.error : AppTheme.textPrimary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
 
                   // Fandom Name
                   TextFormField(
@@ -152,6 +205,7 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
                   // Admission Mode
                   DropdownButtonFormField<String>(
                     initialValue: _admissionMode,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Chế độ gia nhập',
                       prefixIcon: Icon(Icons.door_front_door_outlined, color: AppTheme.textSecondary),
@@ -160,16 +214,41 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
                     items: const [
                       DropdownMenuItem(
                         value: 'OPEN',
-                        child: Text('Tự do (Open) - Bất kỳ ai cũng có thể vào ngay'),
+                        child: Text('Tự do (Open) - Vào ngay'),
                       ),
                       DropdownMenuItem(
                         value: 'APPROVAL',
-                        child: Text('Xét duyệt (Approval) - Cần Owner/Mod duyệt đơn'),
+                        child: Text('Xét duyệt (Approval) - Cần duyệt'),
                       ),
                     ],
                     onChanged: (v) {
                       if (v != null) setState(() => _admissionMode = v);
                     },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Public / Private Switch
+                  Material(
+                    color: AppTheme.surface,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: AppTheme.surfaceLight),
+                    ),
+                    child: SwitchListTile(
+                      value: _isPublic,
+                      onChanged: (val) => setState(() => _isPublic = val),
+                      title: const Text(
+                        'Công khai trên Danh mục Khám phá',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        _isPublic
+                            ? 'Mọi người có thể tìm thấy và xem trước không gian Fandom của bạn.'
+                            : 'Fandom sẽ ở chế độ Riêng tư (chỉ vào qua mã mời hoặc link chia sẻ).',
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                      ),
+                      activeColor: AppTheme.primary,
+                    ),
                   ),
                   const SizedBox(height: 16),
 
@@ -193,17 +272,47 @@ class _CreateFandomScreenState extends State<CreateFandomScreen> {
                       alignLabelWithHint: true,
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
+
+                  if (isQuotaReached) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.error.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppTheme.error.withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.block, color: AppTheme.error, size: 20),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Bạn đã đạt giới hạn tối đa 5 Fandom sở hữu. Hãy xóa bớt Fandom không còn dùng để tạo không gian mới.',
+                              style: TextStyle(color: AppTheme.error, fontSize: 13, height: 1.3),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   ElevatedButton(
-                    onPressed: fandomProvider.isLoading ? null : _handleCreateFandom,
+                    onPressed: (fandomProvider.isLoading || isQuotaReached)
+                        ? null
+                        : _handleCreateFandom,
                     child: fandomProvider.isLoading
                         ? const SizedBox(
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                           )
-                        : const Text('KHỞI TẠO KHÔNG GIAN FANDOM'),
+                        : Text(
+                            isQuotaReached
+                                ? 'ĐÃ ĐẠT GIỚI HẠN 5 FANDOM'
+                                : 'KHỞI TẠO KHÔNG GIAN FANDOM',
+                          ),
                   ),
                 ],
               ),
