@@ -32,6 +32,16 @@ from app.modules.fandom.schemas import (
     FandomJoinRequestOut,
     FandomJoinRequestReview,
     MyFandomsResponse,
+    RoleCreate,
+    RoleUpdate,
+    RoleOut,
+    PresetModAssign,
+    MemberRoleAssign,
+    FandomMemberOut,
+    MemberKickRequest,
+    MemberBanRequest,
+    MemberMuteRequest,
+    ModerationActionResponse,
 )
 from app.modules.fandom.service import FandomService
 
@@ -441,4 +451,328 @@ async def delete_fandom(
         data=data,
         redis=redis,
     )
+
+
+# ---------------------------------------------------------------------------
+# Role Management (Custom Roles & Preset Mods)
+# ---------------------------------------------------------------------------
+
+@fandom_router.get(
+    "/{identifier}/roles",
+    response_model=list[RoleOut],
+    summary="Lấy danh sách các vai trò trong Fandom",
+    description="Trả về toàn bộ vai trò định sẵn và tùy chỉnh trong Fandom, sắp xếp theo thứ bậc ưu tiên (priority) giảm dần.",
+)
+async def list_fandom_roles(
+    identifier: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieves all roles in a fandom ordered by priority."""
+    return await FandomService.list_roles(db=db, identifier=identifier)
+
+
+@fandom_router.post(
+    "/{identifier}/roles",
+    response_model=RoleOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Tạo vai trò tùy chỉnh mới",
+    description="Tạo vai trò mới trong Fandom kèm bitmask quyền hạn. Áp dụng cơ chế kiểm soát thứ bậc chống leo thang đặc quyền.",
+)
+async def create_fandom_role(
+    identifier: str,
+    data: RoleCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Creates a new custom role."""
+    return await FandomService.create_role(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@fandom_router.put(
+    "/{identifier}/roles/{role_id}",
+    response_model=RoleOut,
+    summary="Chỉnh sửa vai trò tùy chỉnh",
+    description="Cập nhật tên, màu sắc, priority hoặc bitmask quyền của vai trò.",
+)
+async def update_fandom_role(
+    identifier: str,
+    role_id: uuid.UUID,
+    data: RoleUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Updates an existing custom role."""
+    return await FandomService.update_role(
+        db=db,
+        identifier=identifier,
+        role_id=role_id,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@fandom_router.delete(
+    "/{identifier}/roles/{role_id}",
+    summary="Xóa vai trò tùy chỉnh",
+    description="Xóa vai trò khỏi Fandom và gỡ bỏ vai trò khỏi các thành viên đang sở hữu.",
+)
+async def delete_fandom_role(
+    identifier: str,
+    role_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Deletes a custom role."""
+    return await FandomService.delete_role(
+        db=db,
+        identifier=identifier,
+        role_id=role_id,
+        current_user=current_user,
+    )
+
+
+@fandom_router.post(
+    "/{identifier}/roles/assign-preset-mod",
+    response_model=RoleOut,
+    summary="Chỉ định vai trò Mod định sẵn (Chỉ Chủ Fandom)",
+    description="Gán vai trò Co-Host, Chat Moderator hoặc Voice Moderator cho một thành viên tin cậy.",
+)
+async def assign_preset_mod(
+    identifier: str,
+    data: PresetModAssign,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assigns a preset moderator role to a trusted member."""
+    return await FandomService.assign_preset_mod(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Member Management & Moderation
+# ---------------------------------------------------------------------------
+
+@fandom_router.get(
+    "/{identifier}/members",
+    response_model=list[FandomMemberOut],
+    summary="Xem danh sách thành viên Fandom",
+    description="Trả về danh sách thành viên kèm vai trò, hỗ trợ tìm kiếm theo tên và lọc theo trạng thái (ACTIVE, MUTED, BANNED, ALL).",
+)
+async def list_fandom_members(
+    identifier: str,
+    search: str | None = Query(None, description="Tìm kiếm theo username hoặc display_name"),
+    status_filter: str = Query("ACTIVE", description="Bộ lọc trạng thái: ACTIVE, MUTED, BANNED, ALL"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lists members of a fandom."""
+    return await FandomService.list_members(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        search=search,
+        status_filter=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@fandom_router.post(
+    "/{identifier}/members/{user_id}/roles",
+    response_model=FandomMemberOut,
+    summary="Gán hoặc đồng bộ danh sách vai trò cho thành viên",
+    description="Cập nhật danh sách vai trò của thành viên với kiểm tra thứ bậc nghiêm ngặt.",
+)
+async def assign_member_roles(
+    identifier: str,
+    user_id: uuid.UUID,
+    data: MemberRoleAssign,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assigns custom roles to a member."""
+    return await FandomService.assign_member_roles(
+        db=db,
+        identifier=identifier,
+        target_user_id=user_id,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@fandom_router.post(
+    "/{identifier}/members/{user_id}/kick",
+    response_model=ModerationActionResponse,
+    summary="Trục xuất thành viên khỏi Fandom (Kick)",
+    description="Buộc thành viên rời khỏi Fandom và xóa các vai trò được cấp. Thành viên vẫn có thể xin gia nhập lại.",
+)
+async def kick_fandom_member(
+    identifier: str,
+    user_id: uuid.UUID,
+    data: MemberKickRequest = Body(default_factory=MemberKickRequest),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Kicks a member from the fandom."""
+    return await FandomService.kick_member(
+        db=db,
+        identifier=identifier,
+        target_user_id=user_id,
+        current_user=current_user,
+        reason=data.reason,
+        redis=redis,
+    )
+
+
+@fandom_router.post(
+    "/{identifier}/members/{user_id}/ban",
+    response_model=ModerationActionResponse,
+    summary="Cấm vĩnh viễn thành viên khỏi Fandom (Ban)",
+    description="Cấm vĩnh viễn người dùng khỏi Fandom và chặn mọi nỗ lực gia nhập lại kể cả qua mã mời.",
+)
+async def ban_fandom_member(
+    identifier: str,
+    user_id: uuid.UUID,
+    data: MemberBanRequest = Body(default_factory=MemberBanRequest),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Permanently bans a user from the fandom."""
+    return await FandomService.ban_member(
+        db=db,
+        identifier=identifier,
+        target_user_id=user_id,
+        current_user=current_user,
+        reason=data.reason,
+        redis=redis,
+    )
+
+
+@fandom_router.post(
+    "/{identifier}/members/{user_id}/unban",
+    response_model=ModerationActionResponse,
+    summary="Gỡ cấm cho người dùng (Unban)",
+    description="Gỡ bỏ lệnh cấm, cho phép người dùng có thể tham gia hoặc được mời lại vào Fandom.",
+)
+async def unban_fandom_member(
+    identifier: str,
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Unbans a user from the fandom."""
+    return await FandomService.unban_member(
+        db=db,
+        identifier=identifier,
+        target_user_id=user_id,
+        current_user=current_user,
+        redis=redis,
+    )
+
+
+@fandom_router.post(
+    "/{identifier}/members/{user_id}/mute",
+    response_model=ModerationActionResponse,
+    summary="Tắt tiếng thành viên có thời hạn (Mute)",
+    description="Khóa quyền gửi tin nhắn chat và phát biểu âm thanh của thành viên trong thời hạn chỉ định.",
+)
+async def mute_fandom_member(
+    identifier: str,
+    user_id: uuid.UUID,
+    data: MemberMuteRequest = Body(default_factory=MemberMuteRequest),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Mutes a member for a duration."""
+    return await FandomService.mute_member(
+        db=db,
+        identifier=identifier,
+        target_user_id=user_id,
+        current_user=current_user,
+        duration_hours=data.duration_hours,
+        reason=data.reason,
+        redis=redis,
+    )
+
+
+@fandom_router.delete(
+    "/{identifier}/members/{user_id}/mute",
+    response_model=ModerationActionResponse,
+    summary="Bỏ tắt tiếng thành viên (Unmute)",
+    description="Khôi phục quyền gửi tin nhắn và phát biểu cho thành viên bị mute.",
+)
+async def unmute_fandom_member(
+    identifier: str,
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Unmutes a muted member."""
+    return await FandomService.unmute_member(
+        db=db,
+        identifier=identifier,
+        target_user_id=user_id,
+        current_user=current_user,
+        redis=redis,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Invite Management
+# ---------------------------------------------------------------------------
+
+@fandom_router.get(
+    "/{identifier}/invites",
+    response_model=list[FandomInviteOut],
+    summary="Xem danh sách mã mời của Fandom",
+    description="Trả về các mã mời đang có hiệu lực trong Fandom.",
+)
+async def list_fandom_invites(
+    identifier: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lists all invites created for a fandom."""
+    return await FandomService.list_invites(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+    )
+
+
+@fandom_router.delete(
+    "/{identifier}/invites/{code}",
+    summary="Thu hồi mã mời",
+    description="Xóa vĩnh viễn mã mời, không cho phép sử dụng thêm.",
+)
+async def revoke_fandom_invite(
+    identifier: str,
+    code: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revokes an invite code."""
+    return await FandomService.revoke_invite(
+        db=db,
+        identifier=identifier,
+        code=code,
+        current_user=current_user,
+    )
+
 

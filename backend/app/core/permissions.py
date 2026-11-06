@@ -35,6 +35,12 @@ class Permission(StrEnum):
     MODERATE_CHAT = "MODERATE_CHAT"
     BYPASS_SLOWMODE = "BYPASS_SLOWMODE"
     MANAGE_CHANNELS = "MANAGE_CHANNELS"
+    MANAGE_ROLES = "MANAGE_ROLES"
+    MUTE_MEMBERS = "MUTE_MEMBERS"
+    KICK_MEMBERS = "KICK_MEMBERS"
+    BAN_MEMBERS = "BAN_MEMBERS"
+    APPROVE_JOIN = "APPROVE_JOIN"
+    CREATE_INVITE = "CREATE_INVITE"
     VOICE_CONNECT = "VOICE_CONNECT"
     VOICE_SPEAK = "VOICE_SPEAK"
     ADMINISTRATOR = "ADMINISTRATOR"
@@ -285,6 +291,8 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
         """
         from app.modules.chat.models import Channel
         from app.modules.fandom.models import Fandom, FandomMember
+        from app.modules.rbac.models import MemberRole, PermissionBit, Role
+        from sqlalchemy import or_
 
         fandom_res = await self._db.execute(
             select(Fandom).where(Fandom.id == fandom_id)
@@ -316,17 +324,64 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
             Permission.READ_MESSAGES,
             Permission.VOICE_CONNECT,
         }
-        if is_currently_muted:
-            return permissions
+        if not is_currently_muted:
+            permissions.update(
+                {
+                    Permission.SEND_MESSAGES,
+                    Permission.ATTACH_FILES,
+                    Permission.EMBED_LINKS,
+                    Permission.VOICE_SPEAK,
+                }
+            )
 
-        permissions.update(
-            {
-                Permission.SEND_MESSAGES,
-                Permission.ATTACH_FILES,
-                Permission.EMBED_LINKS,
-                Permission.VOICE_SPEAK,
-            }
+        # Retrieve active assigned roles for member
+        role_res = await self._db.execute(
+            select(Role)
+            .join(MemberRole, MemberRole.role_id == Role.id)
+            .where(
+                MemberRole.fandom_id == fandom_id,
+                MemberRole.user_id == user_id,
+                or_(MemberRole.expires_at.is_(None), MemberRole.expires_at > now),
+            )
         )
+        roles = role_res.scalars().all()
+
+        combined_bitmask = 0
+        for r in roles:
+            combined_bitmask |= r.permissions_bitmask
+
+        if combined_bitmask & PermissionBit.ADMINISTRATOR:
+            return set(ALL_PERMISSIONS_SET)
+
+        if combined_bitmask & PermissionBit.READ_MESSAGES:
+            permissions.add(Permission.READ_MESSAGES)
+        if combined_bitmask & PermissionBit.SEND_MESSAGES and not is_currently_muted:
+            permissions.add(Permission.SEND_MESSAGES)
+        if combined_bitmask & PermissionBit.EMBED_LINKS and not is_currently_muted:
+            permissions.add(Permission.EMBED_LINKS)
+        if combined_bitmask & PermissionBit.ATTACH_FILES and not is_currently_muted:
+            permissions.add(Permission.ATTACH_FILES)
+        if combined_bitmask & PermissionBit.VOICE_CONNECT:
+            permissions.add(Permission.VOICE_CONNECT)
+        if combined_bitmask & PermissionBit.VOICE_SPEAK and not is_currently_muted:
+            permissions.add(Permission.VOICE_SPEAK)
+        if combined_bitmask & PermissionBit.MANAGE_CHANNELS:
+            permissions.add(Permission.MANAGE_CHANNELS)
+            permissions.add(Permission.SEND_ANNOUNCEMENT)
+        if combined_bitmask & PermissionBit.MANAGE_ROLES:
+            permissions.add(Permission.MANAGE_ROLES)
+        if combined_bitmask & PermissionBit.MODERATE_CHAT:
+            permissions.add(Permission.MODERATE_CHAT)
+        if combined_bitmask & PermissionBit.MUTE_MEMBERS:
+            permissions.add(Permission.MUTE_MEMBERS)
+        if combined_bitmask & PermissionBit.KICK_MEMBERS:
+            permissions.add(Permission.KICK_MEMBERS)
+        if combined_bitmask & PermissionBit.BAN_MEMBERS:
+            permissions.add(Permission.BAN_MEMBERS)
+        if combined_bitmask & PermissionBit.APPROVE_JOIN:
+            permissions.add(Permission.APPROVE_JOIN)
+        if combined_bitmask & PermissionBit.CREATE_INVITE:
+            permissions.add(Permission.CREATE_INVITE)
 
         if channel_id is not None:
             channel_res = await self._db.execute(
@@ -337,12 +392,19 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
             )
             channel = channel_res.scalar_one_or_none()
             if channel:
+                if channel.required_role_id is not None:
+                    has_role = any(r.id == channel.required_role_id for r in roles)
+                    if not has_role:
+                        return set()
+
                 if channel.is_announcement:
-                    permissions.discard(Permission.SEND_MESSAGES)
-                    permissions.discard(Permission.ATTACH_FILES)
-                    permissions.discard(Permission.EMBED_LINKS)
+                    if Permission.SEND_ANNOUNCEMENT not in permissions and Permission.MANAGE_CHANNELS not in permissions:
+                        permissions.discard(Permission.SEND_MESSAGES)
+                        permissions.discard(Permission.ATTACH_FILES)
+                        permissions.discard(Permission.EMBED_LINKS)
                 if channel.type == "VOICE" and channel.voice_room_type == "STAGE_ROOM":
-                    permissions.discard(Permission.VOICE_SPEAK)
+                    if Permission.MODERATE_CHAT not in permissions:
+                        permissions.discard(Permission.VOICE_SPEAK)
 
         return permissions
 

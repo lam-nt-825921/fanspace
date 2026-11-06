@@ -44,6 +44,59 @@ class PermissionBit:
     ]
 
 
+PRESET_MODS = {
+    "CO_HOST": {
+        "name": "Co-Host",
+        "color_hex": "#FF7043",
+        "priority": 90,
+        "permissions_bitmask": (
+            PermissionBit.MANAGE_CHANNELS
+            | PermissionBit.MANAGE_ROLES
+            | PermissionBit.MODERATE_CHAT
+            | PermissionBit.MUTE_MEMBERS
+            | PermissionBit.KICK_MEMBERS
+            | PermissionBit.BAN_MEMBERS
+            | PermissionBit.APPROVE_JOIN
+            | PermissionBit.CREATE_INVITE
+            | PermissionBit.READ_MESSAGES
+            | PermissionBit.SEND_MESSAGES
+            | PermissionBit.EMBED_LINKS
+            | PermissionBit.ATTACH_FILES
+            | PermissionBit.VOICE_CONNECT
+            | PermissionBit.VOICE_SPEAK
+        ),
+    },
+    "CHAT_MODERATOR": {
+        "name": "Chat Moderator",
+        "color_hex": "#42A5F5",
+        "priority": 70,
+        "permissions_bitmask": (
+            PermissionBit.MODERATE_CHAT
+            | PermissionBit.MUTE_MEMBERS
+            | PermissionBit.KICK_MEMBERS
+            | PermissionBit.READ_MESSAGES
+            | PermissionBit.SEND_MESSAGES
+            | PermissionBit.EMBED_LINKS
+            | PermissionBit.ATTACH_FILES
+            | PermissionBit.VOICE_CONNECT
+        ),
+    },
+    "VOICE_MODERATOR": {
+        "name": "Voice Moderator",
+        "color_hex": "#26A69A",
+        "priority": 70,
+        "permissions_bitmask": (
+            PermissionBit.VOICE_CONNECT
+            | PermissionBit.VOICE_SPEAK
+            | PermissionBit.MUTE_MEMBERS
+            | PermissionBit.KICK_MEMBERS
+            | PermissionBit.READ_MESSAGES
+            | PermissionBit.SEND_MESSAGES
+        ),
+    },
+}
+
+
 class Role(Base):
     __tablename__ = "roles"
 
