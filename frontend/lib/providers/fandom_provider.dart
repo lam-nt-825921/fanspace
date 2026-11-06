@@ -293,5 +293,291 @@ class FandomProvider extends ChangeNotifier {
       return {'success': false, 'error': 'Lỗi kết nối: $e'};
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Role Management
+  // ---------------------------------------------------------------------------
+
+  Future<List<RoleModel>> fetchRoles(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get('/api/v1/fandoms/$identifier/roles');
+      final List data = response.data;
+      return data.map((json) => RoleModel.fromJson(json)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> createRole(
+    String identifier, {
+    required String name,
+    String colorHex = '#808080',
+    int priority = 0,
+    int permissionsBitmask = 0,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/roles',
+        data: {
+          'name': name,
+          'color_hex': colorHex,
+          'priority': priority,
+          'permissions_bitmask': permissionsBitmask,
+        },
+      );
+      return {'success': true, 'role': RoleModel.fromJson(response.data)};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể tạo vai trò mới.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateRole(
+    String identifier,
+    String roleId, {
+    String? name,
+    String? colorHex,
+    int? priority,
+    int? permissionsBitmask,
+  }) async {
+    try {
+      final Map<String, dynamic> body = {};
+      if (name != null) body['name'] = name;
+      if (colorHex != null) body['color_hex'] = colorHex;
+      if (priority != null) body['priority'] = priority;
+      if (permissionsBitmask != null) body['permissions_bitmask'] = permissionsBitmask;
+
+      final response = await _apiClient.dio.put(
+        '/api/v1/fandoms/$identifier/roles/$roleId',
+        data: body,
+      );
+      return {'success': true, 'role': RoleModel.fromJson(response.data)};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể cập nhật vai trò.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteRole(String identifier, String roleId) async {
+    try {
+      final response = await _apiClient.dio.delete('/api/v1/fandoms/$identifier/roles/$roleId');
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã xóa vai trò thành công.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể xóa vai trò.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> assignPresetMod(
+    String identifier, {
+    required String userId,
+    required String presetType,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/roles/assign-preset-mod',
+        data: {
+          'user_id': userId,
+          'preset_type': presetType,
+        },
+      );
+      return {'success': true, 'role': RoleModel.fromJson(response.data)};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể gán vai trò Mod.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Member Management & Moderation
+  // ---------------------------------------------------------------------------
+
+  Future<List<FandomMemberModel>> fetchMembers(
+    String identifier, {
+    String? search,
+    String statusFilter = 'ACTIVE',
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    try {
+      final Map<String, dynamic> query = {
+        'status_filter': statusFilter,
+        'limit': limit,
+        'offset': offset,
+      };
+      if (search != null && search.trim().isNotEmpty) {
+        query['search'] = search.trim();
+      }
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/members',
+        queryParameters: query,
+      );
+      final List data = response.data;
+      return data.map((json) => FandomMemberModel.fromJson(json)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> assignMemberRoles(
+    String identifier,
+    String userId,
+    List<String> roleIds,
+  ) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/members/$userId/roles',
+        data: {'role_ids': roleIds},
+      );
+      return {'success': true, 'member': FandomMemberModel.fromJson(response.data)};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể cập nhật vai trò cho thành viên.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> kickMember(
+    String identifier,
+    String userId, {
+    String? reason,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/members/$userId/kick',
+        data: {'reason': reason},
+      );
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã trục xuất thành viên.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể trục xuất thành viên.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> banMember(
+    String identifier,
+    String userId, {
+    String? reason,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/members/$userId/ban',
+        data: {'reason': reason},
+      );
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã cấm vĩnh viễn thành viên.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể cấm thành viên.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> unbanMember(String identifier, String userId) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/members/$userId/unban',
+      );
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã gỡ cấm cho thành viên.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể gỡ cấm cho thành viên.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> muteMember(
+    String identifier,
+    String userId, {
+    int durationHours = 24,
+    String? reason,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/members/$userId/mute',
+        data: {'duration_hours': durationHours, 'reason': reason},
+      );
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã tắt tiếng thành viên.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể tắt tiếng thành viên.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> unmuteMember(String identifier, String userId) async {
+    try {
+      final response = await _apiClient.dio.delete(
+        '/api/v1/fandoms/$identifier/members/$userId/mute',
+      );
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã bỏ tắt tiếng thành viên.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể bỏ tắt tiếng thành viên.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Invite Management
+  // ---------------------------------------------------------------------------
+
+  Future<List<FandomInviteModel>> fetchInvites(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get('/api/v1/fandoms/$identifier/invites');
+      final List data = response.data;
+      return data.map((json) => FandomInviteModel.fromJson(json)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> createInvite(
+    String identifier, {
+    int? maxUses,
+    int? expiresInHours,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/invites',
+        data: {
+          'max_uses': maxUses,
+          'expires_in_hours': expiresInHours,
+        },
+      );
+      return {'success': true, 'invite': FandomInviteModel.fromJson(response.data)};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể tạo mã mời.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> revokeInvite(String identifier, String code) async {
+    try {
+      final response = await _apiClient.dio.delete('/api/v1/fandoms/$identifier/invites/$code');
+      return {'success': true, 'message': response.data?['message'] ?? 'Đã thu hồi mã mời.'};
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể thu hồi mã mời.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
 }
 
