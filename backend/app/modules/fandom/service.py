@@ -20,7 +20,7 @@ from sqlalchemy.orm import contains_eager, selectinload
 from app.core.security import verify_password
 from app.modules.identity.models import User
 from app.modules.fandom.models import Fandom, FandomMember, FandomInvite, FandomJoinRequest
-from app.modules.rbac.models import Role, MemberRole, PermissionBit
+from app.modules.rbac.models import Role, MemberRole, PermissionBit, PRESET_MODS
 from app.modules.fandom.schemas import (
     MAX_FANDOMS_PER_OWNER,
     FandomCreate,
@@ -37,6 +37,16 @@ from app.modules.fandom.schemas import (
     FandomInviteOut,
     FandomJoinRequestOut,
     MyFandomsResponse,
+    RoleCreate,
+    RoleUpdate,
+    RoleOut,
+    PresetModAssign,
+    MemberRoleAssign,
+    FandomMemberOut,
+    MemberKickRequest,
+    MemberBanRequest,
+    MemberMuteRequest,
+    ModerationActionResponse,
 )
 from app.modules.media.service import MediaService
 
@@ -1196,4 +1206,804 @@ class FandomService:
             message=f"Không gian Fandom '{fandom_name}' đã được xóa vĩnh viễn thành công.",
             fandom_id=fandom_id,
         )
+
+    @classmethod
+    async def _get_member_priority_and_permissions(
+        cls,
+        db: AsyncSession,
+        fandom_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> tuple[int, int, bool]:
+        """Resolves the caller's maximum role priority, combined bitmask, and owner status."""
+        fandom = (await db.execute(select(Fandom).where(Fandom.id == fandom_id))).scalar_one_or_none()
+        if not fandom:
+            return 0, 0, False
+
+        if fandom.owner_id == user_id:
+            return 1000000, PermissionBit.ADMINISTRATOR, True
+
+        now = datetime.now(timezone.utc)
+        role_res = await db.execute(
+            select(Role)
+            .join(MemberRole, MemberRole.role_id == Role.id)
+            .where(
+                MemberRole.fandom_id == fandom_id,
+                MemberRole.user_id == user_id,
+                or_(MemberRole.expires_at.is_(None), MemberRole.expires_at > now),
+            )
+        )
+        roles = role_res.scalars().all()
+        if not roles:
+            return 0, 0, False
+
+        max_priority = max(r.priority for r in roles)
+        combined_bitmask = 0
+        for r in roles:
+            combined_bitmask |= r.permissions_bitmask
+
+        return max_priority, combined_bitmask, False
+
+    @classmethod
+    async def list_roles(cls, db: AsyncSession, identifier: str) -> list[RoleOut]:
+        """Returns all custom and preset roles defined within a fandom sorted by priority."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        query = (
+            select(Role)
+            .where(Role.fandom_id == fandom.id)
+            .order_by(Role.priority.desc(), Role.created_at.asc())
+        )
+        roles = (await db.execute(query)).scalars().all()
+        return [RoleOut.model_validate(r) for r in roles]
+
+    @classmethod
+    async def create_role(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        data: RoleCreate,
+    ) -> RoleOut:
+        """Creates a custom role within a fandom, strictly enforcing hierarchy anti-escalation."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.MANAGE_ROLES | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền quản lý vai trò trong Fandom này.",
+            )
+
+        if not is_owner:
+            if data.priority >= caller_priority:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bạn không thể tạo vai trò có độ ưu tiên cao hơn hoặc bằng vai trò của bản thân.",
+                )
+            if (data.permissions_bitmask & ~caller_bitmask) != 0 and not (caller_bitmask & PermissionBit.ADMINISTRATOR):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bạn không thể gán những quyền mà bản thân không sở hữu.",
+                )
+
+        role = Role(
+            fandom_id=fandom.id,
+            name=data.name.strip(),
+            color_hex=data.color_hex.upper(),
+            priority=data.priority,
+            permissions_bitmask=data.permissions_bitmask,
+            is_preset_mod=False,
+            is_membership_tier=False,
+        )
+        db.add(role)
+        await db.commit()
+        await db.refresh(role)
+        return RoleOut.model_validate(role)
+
+    @classmethod
+    async def update_role(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        role_id: uuid.UUID,
+        current_user: User,
+        data: RoleUpdate,
+    ) -> RoleOut:
+        """Updates attributes of an existing custom role."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.MANAGE_ROLES | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền quản lý vai trò trong Fandom này.",
+            )
+
+        role = (
+            await db.execute(select(Role).where(Role.id == role_id, Role.fandom_id == fandom.id))
+        ).scalar_one_or_none()
+        if not role:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy vai trò.")
+
+        if not is_owner:
+            if role.priority >= caller_priority:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Bạn không thể chỉnh sửa vai trò có độ ưu tiên cao hơn hoặc bằng vai trò của bản thân.",
+                )
+            if data.priority is not None and data.priority >= caller_priority:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bạn không thể nâng độ ưu tiên của vai trò vượt quá vai trò của bản thân.",
+                )
+            if data.permissions_bitmask is not None and (data.permissions_bitmask & ~caller_bitmask) != 0 and not (caller_bitmask & PermissionBit.ADMINISTRATOR):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bạn không thể gán những quyền mà bản thân không sở hữu.",
+                )
+
+        if data.name is not None:
+            role.name = data.name.strip()
+        if data.color_hex is not None:
+            role.color_hex = data.color_hex.upper()
+        if data.priority is not None:
+            role.priority = data.priority
+        if data.permissions_bitmask is not None:
+            role.permissions_bitmask = data.permissions_bitmask
+
+        await db.commit()
+        await db.refresh(role)
+        return RoleOut.model_validate(role)
+
+    @classmethod
+    async def delete_role(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        role_id: uuid.UUID,
+        current_user: User,
+    ) -> dict:
+        """Deletes a custom role from the fandom."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.MANAGE_ROLES | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền quản lý vai trò trong Fandom này.",
+            )
+
+        role = (
+            await db.execute(select(Role).where(Role.id == role_id, Role.fandom_id == fandom.id))
+        ).scalar_one_or_none()
+        if not role:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy vai trò.")
+
+        if not is_owner and role.priority >= caller_priority:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không thể xóa vai trò có độ ưu tiên cao hơn hoặc bằng vai trò của bản thân.",
+            )
+
+        await db.delete(role)
+        await db.commit()
+        return {"success": True, "message": f"Đã xóa vai trò '{role.name}' thành công."}
+
+    @classmethod
+    async def assign_preset_mod(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        data: PresetModAssign,
+    ) -> RoleOut:
+        """Assigns a predefined preset moderator role (Owner-only)."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        if fandom.owner_id != current_user.id and current_user.system_role not in ("SYSTEM_ADMIN", "SYSTEM_MODERATOR"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chỉ Chủ sở hữu Fandom mới có quyền chỉ định các vai trò Mod định sẵn.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == data.user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not target_mem or target_mem.status != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Người dùng được chỉ định phải là thành viên đang hoạt động trong Fandom.",
+            )
+
+        cfg = PRESET_MODS[data.preset_type]
+        preset_role = (
+            await db.execute(
+                select(Role).where(
+                    Role.fandom_id == fandom.id,
+                    Role.name == cfg["name"],
+                    Role.is_preset_mod == True,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not preset_role:
+            preset_role = Role(
+                fandom_id=fandom.id,
+                name=cfg["name"],
+                color_hex=cfg["color_hex"],
+                priority=cfg["priority"],
+                permissions_bitmask=cfg["permissions_bitmask"],
+                is_preset_mod=True,
+                is_membership_tier=False,
+            )
+            db.add(preset_role)
+            await db.flush()
+
+        existing_mr = (
+            await db.execute(
+                select(MemberRole).where(
+                    MemberRole.fandom_id == fandom.id,
+                    MemberRole.user_id == data.user_id,
+                    MemberRole.role_id == preset_role.id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not existing_mr:
+            db.add(
+                MemberRole(
+                    fandom_id=fandom.id,
+                    user_id=data.user_id,
+                    role_id=preset_role.id,
+                    assigned_by=current_user.id,
+                )
+            )
+            await db.commit()
+
+        return RoleOut.model_validate(preset_role)
+
+    @classmethod
+    async def list_members(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        search: str | None = None,
+        status_filter: str = "ACTIVE",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[FandomMemberOut]:
+        """Lists members belonging to a fandom with role mappings and status filtering."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == current_user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not caller_mem and fandom.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn cần là thành viên để xem danh sách thành viên Fandom.",
+            )
+
+        query = (
+            select(FandomMember)
+            .join(User, User.id == FandomMember.user_id)
+            .options(selectinload(FandomMember.user))
+            .where(FandomMember.fandom_id == fandom.id)
+        )
+        if status_filter != "ALL":
+            query = query.where(FandomMember.status == status_filter)
+
+        if search:
+            clean_search = f"%{search.strip().lower()}%"
+            query = query.where(
+                or_(
+                    func.lower(User.username).like(clean_search),
+                    func.lower(User.display_name).like(clean_search),
+                )
+            )
+
+        query = query.order_by(FandomMember.joined_at.asc()).limit(limit).offset(offset)
+        members = (await db.execute(query)).scalars().all()
+
+        results: list[FandomMemberOut] = []
+        now = datetime.now(timezone.utc)
+        for m in members:
+            # Load active roles
+            mr_query = (
+                select(Role)
+                .join(MemberRole, MemberRole.role_id == Role.id)
+                .where(
+                    MemberRole.fandom_id == fandom.id,
+                    MemberRole.user_id == m.user_id,
+                    or_(MemberRole.expires_at.is_(None), MemberRole.expires_at > now),
+                )
+                .order_by(Role.priority.desc())
+            )
+            member_roles = (await db.execute(mr_query)).scalars().all()
+
+            results.append(
+                FandomMemberOut(
+                    user_id=m.user.id,
+                    username=m.user.username,
+                    display_name=m.user.display_name,
+                    avatar_url=m.user.avatar_url,
+                    status=m.status,
+                    muted_until=m.muted_until,
+                    joined_at=m.joined_at,
+                    roles=[RoleOut.model_validate(r) for r in member_roles],
+                )
+            )
+
+        return results
+
+    @classmethod
+    async def assign_member_roles(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        target_user_id: uuid.UUID,
+        current_user: User,
+        data: MemberRoleAssign,
+    ) -> FandomMemberOut:
+        """Assigns or updates a member's custom roles with hierarchy validation."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.MANAGE_ROLES | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền quản lý vai trò trong Fandom này.",
+            )
+
+        if target_user_id == fandom.owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể thay đổi vai trò của Chủ sở hữu Fandom.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember)
+                .options(selectinload(FandomMember.user))
+                .where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == target_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not target_mem or target_mem.status == "BANNED":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy thành viên trong Fandom.")
+
+        target_priority, _, _ = await cls._get_member_priority_and_permissions(db, fandom.id, target_user_id)
+        if not is_owner and target_priority >= caller_priority:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không thể sửa vai trò của thành viên có thứ bậc cao hơn hoặc bằng bản thân.",
+            )
+
+        # Validate requested roles
+        target_roles: list[Role] = []
+        if data.role_ids:
+            role_q = select(Role).where(Role.fandom_id == fandom.id, Role.id.in_(data.role_ids))
+            target_roles = (await db.execute(role_q)).scalars().all()
+            for r in target_roles:
+                if not is_owner and r.priority >= caller_priority:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Bạn không thể gán vai trò '{r.name}' có thứ bậc cao hơn hoặc bằng bản thân.",
+                    )
+
+        # Clear existing non-tier assignments
+        await db.execute(
+            delete(MemberRole).where(
+                MemberRole.fandom_id == fandom.id,
+                MemberRole.user_id == target_user_id,
+            )
+        )
+
+        # Add new assignments
+        for r in target_roles:
+            db.add(
+                MemberRole(
+                    fandom_id=fandom.id,
+                    user_id=target_user_id,
+                    role_id=r.id,
+                    assigned_by=current_user.id,
+                )
+            )
+
+        await db.commit()
+
+        return FandomMemberOut(
+            user_id=target_mem.user.id,
+            username=target_mem.user.username,
+            display_name=target_mem.user.display_name,
+            avatar_url=target_mem.user.avatar_url,
+            status=target_mem.status,
+            muted_until=target_mem.muted_until,
+            joined_at=target_mem.joined_at,
+            roles=[RoleOut.model_validate(r) for r in target_roles],
+        )
+
+    @classmethod
+    async def kick_member(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        target_user_id: uuid.UUID,
+        current_user: User,
+        reason: str | None = None,
+        redis: aioredis.Redis | None = None,
+    ) -> ModerationActionResponse:
+        """Expels a member from the fandom."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.KICK_MEMBERS | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền trục xuất thành viên khỏi Fandom.",
+            )
+
+        if target_user_id == fandom.owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể trục xuất Chủ sở hữu Fandom.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == target_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not target_mem or target_mem.status == "BANNED":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy thành viên trong Fandom.")
+
+        target_priority, _, _ = await cls._get_member_priority_and_permissions(db, fandom.id, target_user_id)
+        if not is_owner and target_priority >= caller_priority:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không thể trục xuất thành viên có thứ bậc cao hơn hoặc bằng bản thân.",
+            )
+
+        # Delete member roles & member record
+        await db.execute(
+            delete(MemberRole).where(
+                MemberRole.fandom_id == fandom.id,
+                MemberRole.user_id == target_user_id,
+            )
+        )
+        await db.delete(target_mem)
+        fandom.member_count = max(1, fandom.member_count - 1)
+        await db.commit()
+
+        await cls._invalidate_fandom_membership_caches(redis, fandom, target_user_id)
+        return ModerationActionResponse(
+            success=True,
+            message="Đã trục xuất thành viên khỏi Fandom thành công.",
+            action="KICK",
+            user_id=target_user_id,
+        )
+
+    @classmethod
+    async def ban_member(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        target_user_id: uuid.UUID,
+        current_user: User,
+        reason: str | None = None,
+        redis: aioredis.Redis | None = None,
+    ) -> ModerationActionResponse:
+        """Permanently bans a user from the fandom."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.BAN_MEMBERS | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền cấm thành viên khỏi Fandom.",
+            )
+
+        if target_user_id == fandom.owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể cấm Chủ sở hữu Fandom.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == target_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if target_mem:
+            target_priority, _, _ = await cls._get_member_priority_and_permissions(db, fandom.id, target_user_id)
+            if not is_owner and target_priority >= caller_priority:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Bạn không thể cấm thành viên có thứ bậc cao hơn hoặc bằng bản thân.",
+                )
+            target_mem.status = "BANNED"
+            await db.execute(
+                delete(MemberRole).where(
+                    MemberRole.fandom_id == fandom.id,
+                    MemberRole.user_id == target_user_id,
+                )
+            )
+            fandom.member_count = max(1, fandom.member_count - 1)
+        else:
+            # Pre-emptively record ban
+            db.add(FandomMember(fandom_id=fandom.id, user_id=target_user_id, status="BANNED"))
+
+        # Clean up any pending join requests
+        await db.execute(
+            delete(FandomJoinRequest).where(
+                FandomJoinRequest.fandom_id == fandom.id,
+                FandomJoinRequest.user_id == target_user_id,
+            )
+        )
+
+        await db.commit()
+        await cls._invalidate_fandom_membership_caches(redis, fandom, target_user_id)
+        return ModerationActionResponse(
+            success=True,
+            message="Đã cấm vĩnh viễn thành viên khỏi Fandom.",
+            action="BAN",
+            user_id=target_user_id,
+        )
+
+    @classmethod
+    async def unban_member(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        target_user_id: uuid.UUID,
+        current_user: User,
+        redis: aioredis.Redis | None = None,
+    ) -> ModerationActionResponse:
+        """Removes a user from the fandom's ban list."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.BAN_MEMBERS | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền gỡ cấm trong Fandom này.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == target_user_id,
+                    FandomMember.status == "BANNED",
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not target_mem:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Người dùng không nằm trong danh sách cấm của Fandom.",
+            )
+
+        await db.delete(target_mem)
+        await db.commit()
+        await cls._invalidate_fandom_membership_caches(redis, fandom, target_user_id)
+        return ModerationActionResponse(
+            success=True,
+            message="Đã gỡ cấm cho người dùng thành công.",
+            action="UNBAN",
+            user_id=target_user_id,
+        )
+
+    @classmethod
+    async def mute_member(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        target_user_id: uuid.UUID,
+        current_user: User,
+        duration_hours: int = 24,
+        reason: str | None = None,
+        redis: aioredis.Redis | None = None,
+    ) -> ModerationActionResponse:
+        """Temporarily mutes a member from sending messages or speaking in voice channels."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.MUTE_MEMBERS | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền tắt tiếng thành viên trong Fandom này.",
+            )
+
+        if target_user_id == fandom.owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể tắt tiếng Chủ sở hữu Fandom.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == target_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not target_mem or target_mem.status == "BANNED":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy thành viên trong Fandom.")
+
+        target_priority, _, _ = await cls._get_member_priority_and_permissions(db, fandom.id, target_user_id)
+        if not is_owner and target_priority >= caller_priority:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không thể tắt tiếng thành viên có thứ bậc cao hơn hoặc bằng bản thân.",
+            )
+
+        target_mem.status = "MUTED"
+        target_mem.muted_until = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
+        await db.commit()
+
+        await cls._invalidate_fandom_membership_caches(redis, fandom, target_user_id)
+        return ModerationActionResponse(
+            success=True,
+            message=f"Đã tắt tiếng thành viên trong {duration_hours} giờ.",
+            action="MUTE",
+            user_id=target_user_id,
+        )
+
+    @classmethod
+    async def unmute_member(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        target_user_id: uuid.UUID,
+        current_user: User,
+        redis: aioredis.Redis | None = None,
+    ) -> ModerationActionResponse:
+        """Unmutes a muted member."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.MUTE_MEMBERS | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền bỏ tắt tiếng thành viên trong Fandom này.",
+            )
+
+        target_mem = (
+            await db.execute(
+                select(FandomMember).where(
+                    FandomMember.fandom_id == fandom.id,
+                    FandomMember.user_id == target_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not target_mem or target_mem.status != "MUTED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Thành viên hiện không trong trạng thái bị tắt tiếng.",
+            )
+
+        target_mem.status = "ACTIVE"
+        target_mem.muted_until = None
+        await db.commit()
+
+        await cls._invalidate_fandom_membership_caches(redis, fandom, target_user_id)
+        return ModerationActionResponse(
+            success=True,
+            message="Đã mở lại tiếng cho thành viên thành công.",
+            action="UNMUTE",
+            user_id=target_user_id,
+        )
+
+    @classmethod
+    async def list_invites(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+    ) -> list[FandomInviteOut]:
+        """Lists active invite codes created for a fandom."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.CREATE_INVITE | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền xem danh sách mã mời của Fandom.",
+            )
+
+        inv_query = (
+            select(FandomInvite)
+            .where(FandomInvite.fandom_id == fandom.id)
+            .order_by(FandomInvite.created_at.desc())
+        )
+        invites = (await db.execute(inv_query)).scalars().all()
+        return [
+            FandomInviteOut(
+                code=inv.code,
+                fandom_id=fandom.id,
+                fandom_name=fandom.name,
+                fandom_slug=fandom.slug,
+                max_uses=inv.max_uses,
+                uses_count=inv.uses_count,
+                expires_at=inv.expires_at,
+                created_at=inv.created_at,
+            )
+            for inv in invites
+        ]
+
+    @classmethod
+    async def revoke_invite(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        code: str,
+        current_user: User,
+    ) -> dict:
+        """Revokes an invite code so it can no longer be used."""
+        fandom = await cls._resolve_fandom(db, identifier)
+        caller_priority, caller_bitmask, is_owner = await cls._get_member_priority_and_permissions(
+            db, fandom.id, current_user.id
+        )
+
+        if not is_owner and not (caller_bitmask & (PermissionBit.CREATE_INVITE | PermissionBit.ADMINISTRATOR)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền thu hồi mã mời của Fandom.",
+            )
+
+        clean_code = code.strip().upper()
+        inv_query = select(FandomInvite).where(
+            FandomInvite.fandom_id == fandom.id,
+            FandomInvite.code == clean_code,
+        )
+        invite = (await db.execute(inv_query)).scalar_one_or_none()
+        if not invite:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy mã mời.")
+
+        await db.delete(invite)
+        await db.commit()
+        return {"success": True, "message": f"Đã thu hồi mã mời '{clean_code}' thành công."}
+
 

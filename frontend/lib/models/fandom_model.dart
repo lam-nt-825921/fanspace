@@ -267,3 +267,175 @@ class MyFandomsDataModel {
   }
 }
 
+class FandomPermissionBit {
+  static const int readMessages = 1 << 0;
+  static const int sendMessages = 1 << 1;
+  static const int embedLinks = 1 << 2;
+  static const int attachFiles = 1 << 3;
+  static const int voiceConnect = 1 << 4;
+  static const int voiceSpeak = 1 << 5;
+  static const int manageChannels = 1 << 6;
+  static const int manageRoles = 1 << 7;
+  static const int moderateChat = 1 << 8;
+  static const int muteMembers = 1 << 9;
+  static const int kickMembers = 1 << 10;
+  static const int banMembers = 1 << 11;
+  static const int approveJoin = 1 << 12;
+  static const int createInvite = 1 << 13;
+  static const int administrator = 1 << 14;
+
+  static const List<Map<String, dynamic>> allPermissions = [
+    {"bit": readMessages, "name": "Đọc tin nhắn", "desc": "Xem nội dung trong các kênh chat"},
+    {"bit": sendMessages, "name": "Gửi tin nhắn", "desc": "Gửi tin nhắn vào các kênh thảo luận"},
+    {"bit": embedLinks, "name": "Chèn liên kết", "desc": "Gửi link kèm rich preview"},
+    {"bit": attachFiles, "name": "Đính kèm tệp & ảnh", "desc": "Tải ảnh và tệp lên kênh chat"},
+    {"bit": voiceConnect, "name": "Tham gia phòng Voice", "desc": "Kết nối vào các phòng âm thanh"},
+    {"bit": voiceSpeak, "name": "Phát biểu trong Voice", "desc": "Bật mic nói chuyện trong phòng"},
+    {"bit": manageChannels, "name": "Quản lý Kênh", "desc": "Tạo, sửa, xóa các kênh Text và Voice"},
+    {"bit": manageRoles, "name": "Quản lý Vai trò", "desc": "Tạo và cấu hình quyền các Role"},
+    {"bit": moderateChat, "name": "Kiểm duyệt Tin nhắn", "desc": "Ghim hoặc xóa tin nhắn vi phạm"},
+    {"bit": muteMembers, "name": "Tắt tiếng thành viên", "desc": "Mute thành viên có thời hạn"},
+    {"bit": kickMembers, "name": "Trục xuất thành viên", "desc": "Kick thành viên vi phạm khỏi fandom"},
+    {"bit": banMembers, "name": "Cấm vĩnh viễn", "desc": "Ban vĩnh viễn thành viên khỏi fandom"},
+    {"bit": approveJoin, "name": "Xét duyệt đơn gia nhập", "desc": "Duyệt hoặc từ chối đơn xét tuyển"},
+    {"bit": createInvite, "name": "Tạo Link mời", "desc": "Tạo mã mời có giới hạn tham gia fandom"},
+    {"bit": administrator, "name": "Quản trị viên tối cao", "desc": "Toàn quyền quản trị (bỏ qua mọi rào cản)"},
+  ];
+}
+
+class RoleModel {
+  final String id;
+  final String fandomId;
+  final String name;
+  final String colorHex;
+  final int priority;
+  final int permissionsBitmask;
+  final bool isPresetMod;
+  final bool isMembershipTier;
+  final DateTime? createdAt;
+
+  RoleModel({
+    required this.id,
+    required this.fandomId,
+    required this.name,
+    this.colorHex = '#808080',
+    this.priority = 0,
+    this.permissionsBitmask = 0,
+    this.isPresetMod = false,
+    this.isMembershipTier = false,
+    this.createdAt,
+  });
+
+  bool hasPermission(int bit) =>
+      (permissionsBitmask & bit) != 0 || (permissionsBitmask & FandomPermissionBit.administrator) != 0;
+
+  factory RoleModel.fromJson(Map<String, dynamic> json) {
+    return RoleModel(
+      id: json['id'] ?? '',
+      fandomId: json['fandom_id'] ?? '',
+      name: json['name'] ?? '',
+      colorHex: json['color_hex'] ?? '#808080',
+      priority: json['priority'] ?? 0,
+      permissionsBitmask: json['permissions_bitmask'] ?? 0,
+      isPresetMod: json['is_preset_mod'] ?? false,
+      isMembershipTier: json['is_membership_tier'] ?? false,
+      createdAt: json['created_at'] != null ? DateTime.tryParse(json['created_at']) : null,
+    );
+  }
+}
+
+class FandomMemberModel {
+  final String userId;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final String status;
+  final DateTime? mutedUntil;
+  final DateTime? joinedAt;
+  final List<RoleModel> roles;
+
+  FandomMemberModel({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    this.avatarUrl,
+    required this.status,
+    this.mutedUntil,
+    this.joinedAt,
+    this.roles = const [],
+  });
+
+  bool get isMuted {
+    if (status != 'MUTED') return false;
+    if (mutedUntil == null) return true;
+    return mutedUntil!.isAfter(DateTime.now());
+  }
+
+  bool get isBanned => status == 'BANNED';
+
+  int get maxPriority {
+    if (roles.isEmpty) return 0;
+    return roles.map((r) => r.priority).reduce((a, b) => a > b ? a : b);
+  }
+
+  factory FandomMemberModel.fromJson(Map<String, dynamic> json) {
+    final rawRoles = json['roles'];
+    return FandomMemberModel(
+      userId: json['user_id'] ?? '',
+      username: json['username'] ?? '',
+      displayName: json['display_name'] ?? '',
+      avatarUrl: json['avatar_url'],
+      status: json['status'] ?? 'ACTIVE',
+      mutedUntil: json['muted_until'] != null ? DateTime.tryParse(json['muted_until']) : null,
+      joinedAt: json['joined_at'] != null ? DateTime.tryParse(json['joined_at']) : null,
+      roles: rawRoles is List ? rawRoles.map((e) => RoleModel.fromJson(e)).toList() : const [],
+    );
+  }
+}
+
+class FandomInviteModel {
+  final String code;
+  final String fandomId;
+  final String fandomName;
+  final String fandomSlug;
+  final int? maxUses;
+  final int usesCount;
+  final DateTime? expiresAt;
+  final DateTime? createdAt;
+
+  FandomInviteModel({
+    required this.code,
+    required this.fandomId,
+    required this.fandomName,
+    required this.fandomSlug,
+    this.maxUses,
+    this.usesCount = 0,
+    this.expiresAt,
+    this.createdAt,
+  });
+
+  bool get isExpired {
+    if (expiresAt == null) return false;
+    return expiresAt!.isBefore(DateTime.now());
+  }
+
+  bool get isExhausted {
+    if (maxUses == null) return false;
+    return usesCount >= maxUses!;
+  }
+
+  factory FandomInviteModel.fromJson(Map<String, dynamic> json) {
+    return FandomInviteModel(
+      code: json['code'] ?? '',
+      fandomId: json['fandom_id'] ?? '',
+      fandomName: json['fandom_name'] ?? '',
+      fandomSlug: json['fandom_slug'] ?? '',
+      maxUses: json['max_uses'],
+      usesCount: json['uses_count'] ?? 0,
+      expiresAt: json['expires_at'] != null ? DateTime.tryParse(json['expires_at']) : null,
+      createdAt: json['created_at'] != null ? DateTime.tryParse(json['created_at']) : null,
+    );
+  }
+}
+
+

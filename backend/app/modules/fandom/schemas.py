@@ -226,3 +226,88 @@ class MyFandomsResponse(BaseModel):
     pending_requests: list[FandomJoinRequestOut] = Field(default_factory=list, description="Danh sách đơn xin gia nhập đang chờ duyệt")
     quota_used: int = Field(default=0, description="Số lượng Fandom người dùng đang sở hữu")
     max_quota: int = Field(default=MAX_FANDOMS_PER_OWNER, description="Giới hạn số Fandom tối đa được sở hữu cùng lúc")
+
+
+class RoleCreate(BaseModel):
+    """Payload for creating a new custom role."""
+    name: str = Field(..., min_length=1, max_length=50, description="Tên vai trò")
+    color_hex: str = Field(default="#808080", pattern=r"^#[0-9a-fA-F]{6}$", description="Mã màu HEX hiển thị")
+    priority: int = Field(default=0, ge=0, le=1000, description="Độ ưu tiên thứ bậc (càng cao càng lớn)")
+    permissions_bitmask: int = Field(default=0, ge=0, description="Tổ hợp quyền hạn bitmask O(1)")
+
+
+class RoleUpdate(BaseModel):
+    """Payload for updating an existing role."""
+    name: str | None = Field(None, min_length=1, max_length=50, description="Tên vai trò mới")
+    color_hex: str | None = Field(None, pattern=r"^#[0-9a-fA-F]{6}$", description="Mã màu HEX mới")
+    priority: int | None = Field(None, ge=0, le=1000, description="Độ ưu tiên thứ bậc mới")
+    permissions_bitmask: int | None = Field(None, ge=0, description="Tổ hợp quyền hạn bitmask mới")
+
+
+class RoleOut(BaseModel):
+    """Public projection of a fandom role."""
+    id: uuid.UUID = Field(..., description="ID vai trò")
+    fandom_id: uuid.UUID = Field(..., description="ID Fandom")
+    name: str = Field(..., description="Tên vai trò")
+    color_hex: str = Field(..., description="Mã màu HEX")
+    priority: int = Field(..., description="Độ ưu tiên thứ bậc")
+    permissions_bitmask: int = Field(..., description="Bitmask quyền hạn")
+    is_preset_mod: bool = Field(default=False, description="Là vai trò Mod định sẵn")
+    is_membership_tier: bool = Field(default=False, description="Là gói Membership trả phí")
+    created_at: datetime = Field(..., description="Thời điểm tạo")
+
+    model_config = {"from_attributes": True}
+
+
+class PresetModAssign(BaseModel):
+    """Payload for assigning a preset moderator role to a member."""
+    user_id: uuid.UUID = Field(..., description="ID thành viên được bổ nhiệm")
+    preset_type: str = Field(
+        ...,
+        pattern=r"^(CO_HOST|CHAT_MODERATOR|VOICE_MODERATOR)$",
+        description="Loại vai trò Mod định sẵn: CO_HOST, CHAT_MODERATOR, VOICE_MODERATOR",
+    )
+
+
+class MemberRoleAssign(BaseModel):
+    """Payload for synchronizing assigned custom roles of a member."""
+    role_ids: list[uuid.UUID] = Field(default_factory=list, description="Danh sách ID vai trò được gán")
+
+
+class FandomMemberOut(BaseModel):
+    """Comprehensive representation of a fandom member with roles and status."""
+    user_id: uuid.UUID = Field(..., description="ID người dùng")
+    username: str = Field(..., description="Tên tài khoản")
+    display_name: str = Field(..., description="Tên hiển thị")
+    avatar_url: str | None = Field(None, description="Ảnh đại diện")
+    status: str = Field(..., description="Trạng thái: ACTIVE, MUTED, BANNED")
+    muted_until: datetime | None = Field(None, description="Thời điểm hết hạn tắt tiếng")
+    joined_at: datetime = Field(..., description="Thời điểm gia nhập")
+    roles: list[RoleOut] = Field(default_factory=list, description="Danh sách vai trò của thành viên")
+
+    model_config = {"from_attributes": True}
+
+
+class MemberKickRequest(BaseModel):
+    """Payload for kicking a member from fandom."""
+    reason: str | None = Field(None, max_length=255, description="Lý do trục xuất")
+
+
+class MemberBanRequest(BaseModel):
+    """Payload for permanently banning a user from fandom."""
+    reason: str | None = Field(None, max_length=255, description="Lý do cấm vĩnh viễn")
+
+
+class MemberMuteRequest(BaseModel):
+    """Payload for muting a member in fandom."""
+    duration_hours: int = Field(default=24, ge=1, le=8760, description="Thời lượng tắt tiếng (giờ)")
+    reason: str | None = Field(None, max_length=255, description="Lý do tắt tiếng")
+
+
+class ModerationActionResponse(BaseModel):
+    """Response returned upon performing a member moderation action."""
+    success: bool = Field(default=True, description="Trạng thái thực thi")
+    message: str = Field(..., description="Thông báo kết quả")
+    action: str = Field(..., description="Hành động: KICK, BAN, UNBAN, MUTE, UNMUTE")
+    user_id: uuid.UUID = Field(..., description="ID người dùng bị xử phạt")
+

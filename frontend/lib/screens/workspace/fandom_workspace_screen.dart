@@ -15,6 +15,7 @@ import '../../models/channel_model.dart';
 import '../../models/fandom_model.dart';
 import '../../models/message_model.dart';
 import '../../providers/fandom_provider.dart';
+import 'fandom_management_dialog.dart';
 
 /// Active navigation section inside the Fandom workspace.
 enum WorkspaceSection {
@@ -1033,137 +1034,15 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) {
-        bool currentPublic = _fandom!.isPublic;
-        bool isUpdating = false;
-
-        return StatefulBuilder(
-          builder: (dialogCtx, setDialogState) {
-            return Theme(
-              data: AppTheme.darkTheme,
-              child: AlertDialog(
-                backgroundColor: AppTheme.surface,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                title: Row(
-                  children: [
-                    const Icon(Icons.settings_suggest, color: AppTheme.primary, size: 24),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Cài đặt Fandom: ${_fandom!.name}',
-                        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-                content: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 480),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text(
-                        'Chế độ hiển thị không gian',
-                        style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 8),
-                      Material(
-                        color: AppTheme.background,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          side: const BorderSide(color: AppTheme.surfaceLight),
-                        ),
-                        child: SwitchListTile(
-                          value: currentPublic,
-                          activeColor: AppTheme.primary,
-                          title: Text(
-                            currentPublic ? 'Công khai (Public)' : 'Riêng tư (Private)',
-                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
-                          ),
-                          subtitle: Text(
-                            currentPublic
-                                ? 'Fandom xuất hiện trên Danh mục Khám phá công khai.'
-                                : 'Ẩn khỏi Danh mục Khám phá (chỉ truy cập qua link/mã mời).',
-                            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                          ),
-                          onChanged: isUpdating
-                              ? null
-                              : (val) async {
-                                  setDialogState(() => isUpdating = true);
-                                  final provider = context.read<FandomProvider>();
-                                  final res = await provider.updateFandomVisibility(_fandom!.slug, val);
-                                  if (!mounted) return;
-                                  if (res['success'] == true) {
-                                    setState(() {
-                                      _fandom = _fandom!.copyWith(isPublic: val);
-                                    });
-                                    setDialogState(() {
-                                      currentPublic = val;
-                                      isUpdating = false;
-                                    });
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(res['message'] ?? 'Đã cập nhật trạng thái hiển thị.'),
-                                        backgroundColor: AppTheme.success,
-                                      ),
-                                    );
-                                  } else {
-                                    setDialogState(() => isUpdating = false);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(res['error'] ?? 'Không thể cập nhật.'),
-                                        backgroundColor: AppTheme.error,
-                                      ),
-                                    );
-                                  }
-                                },
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      const Divider(color: AppTheme.surfaceLight),
-                      const SizedBox(height: 12),
-                      const Row(
-                        children: [
-                          Icon(Icons.warning_amber_rounded, color: AppTheme.error, size: 20),
-                          SizedBox(width: 8),
-                          Text(
-                            'Vùng nguy hiểm (Danger Zone)',
-                            style: TextStyle(color: AppTheme.error, fontWeight: FontWeight.bold, fontSize: 14),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Xóa hoàn toàn không gian Fandom này cùng toàn bộ kênh thảo luận, tin nhắn chat và vai trò thành viên. Hành động này không thể hoàn tác.',
-                        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.error,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                        icon: const Icon(Icons.delete_forever, size: 18),
-                        label: const Text('XÓA VĨNH VIỄN FANDOM NÀY'),
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          _showConfirmDeleteFandomDialog();
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('Đóng'),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (ctx) => FandomManagementDialog(
+        fandom: _fandom!,
+        onFandomUpdated: (updated) {
+          setState(() {
+            _fandom = updated;
+          });
+        },
+        onDeleteRequested: _showConfirmDeleteFandomDialog,
+      ),
     );
   }
 
