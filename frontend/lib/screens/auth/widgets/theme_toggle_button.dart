@@ -4,24 +4,26 @@ import '../../../providers/theme_provider.dart';
 
 class ThemeToggleButton extends StatelessWidget {
   final bool showLabel;
+  final bool compact;
 
   const ThemeToggleButton({
     super.key,
     this.showLabel = false,
+    this.compact = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.isDarkMode;
+    final themeProvider = context.watch<ThemeProvider?>();
     final isLight = Theme.of(context).brightness == Brightness.light;
+    final isDark = themeProvider?.isDarkMode ?? !isLight;
 
     final iconColor = isLight ? const Color(0xFF6C3CE9) : const Color(0xFFFFB74D);
     final bgColor = isLight ? Colors.black.withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.1);
 
     if (showLabel) {
       return TextButton.icon(
-        onPressed: () => themeProvider.toggleTheme(),
+        onPressed: () => themeProvider?.toggleTheme(),
         icon: Icon(
           isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
           color: iconColor,
@@ -43,13 +45,13 @@ class ThemeToggleButton extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => themeProvider.toggleTheme(),
-          borderRadius: BorderRadius.circular(12),
+          onTap: () => themeProvider?.toggleTheme(),
+          borderRadius: BorderRadius.circular(compact ? 8 : 12),
           child: Container(
-            padding: const EdgeInsets.all(10),
+            padding: EdgeInsets.all(compact ? 6 : 10),
             decoration: BoxDecoration(
               color: bgColor,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(compact ? 8 : 12),
               border: Border.all(
                 color: isLight ? Colors.black.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.1),
               ),
@@ -64,7 +66,7 @@ class ThemeToggleButton extends StatelessWidget {
                 isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                 key: ValueKey<bool>(isDark),
                 color: iconColor,
-                size: 22,
+                size: compact ? 18 : 22,
               ),
             ),
           ),

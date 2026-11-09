@@ -140,12 +140,35 @@ void main() {
       await tester.tap(find.text('chat-chung').first);
       await tester.pumpAndSettle();
 
-      // Verify edited label and reaction count chip are shown
-      expect(find.textContaining('(đã chỉnh sửa)'), findsOneWidget);
+      // Verify edited label (without parentheses) and reaction count chip are shown
+      expect(find.textContaining('đã chỉnh sửa'), findsOneWidget);
       expect(find.text('🔥 2'), findsOneWidget);
 
-      // Verify reply quote preview is rendered
-      expect(find.textContaining('Ca Sĩ A'), findsWidgets);
+      // Verify grouped emoji picker and 3-dot action button are present next to message text
+      expect(
+        find.byKey(const Key('message_reaction_picker_msg-1')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('message_more_msg-1')), findsOneWidget);
+
+      // Verify Slack-style reply thread is shown and can be collapsed/expanded
+      expect(find.text('1 phản hồi'), findsOneWidget);
+      expect(
+        find.text('Tuyệt vời quá, mình đã đặt lịch nhắc hẹn!'),
+        findsOneWidget,
+      );
+
+      // Collapse reply thread
+      await tester.tap(find.byKey(const Key('thread_toggle_msg-1')));
+      await tester.pumpAndSettle();
+
+      // Expand reply thread back
+      await tester.tap(find.byKey(const Key('thread_toggle_msg-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Tuyệt vời quá, mình đã đặt lịch nhắc hẹn!'),
+        findsOneWidget,
+      );
 
       // Verify recalled message placeholder is shown
       expect(find.text('Tin nhắn đã bị thu hồi.'), findsOneWidget);
