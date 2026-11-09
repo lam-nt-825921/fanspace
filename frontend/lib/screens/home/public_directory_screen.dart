@@ -1,18 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+
 import '../../core/theme/app_theme.dart';
-import '../../models/fandom_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/fandom_provider.dart';
-import '../auth/widgets/theme_toggle_button.dart';
-import '../auth/widgets/active_sessions_dialog.dart';
-import '../auth/widgets/email_otp_dialog.dart';
-import '../auth/widgets/oauth_set_password_dialog.dart';
-import '../profile/user_settings_dialog.dart';
-import '../profile/user_card_dialog.dart';
+import '../../widgets/navigation/app_top_nav_bar.dart';
+import 'dialogs/join_by_invite_dialog.dart';
+import 'widgets/directory_filter_bar.dart';
+import 'widgets/fandom_card.dart';
 
-
+/// Public Fandom discovery directory screen.
 class PublicDirectoryScreen extends StatefulWidget {
   const PublicDirectoryScreen({super.key});
 
@@ -27,7 +25,8 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final fandomProvider = Provider.of<FandomProvider>(context, listen: false);
+      final fandomProvider =
+          Provider.of<FandomProvider>(context, listen: false);
       fandomProvider.fetchCategories();
       fandomProvider.fetchPublicFandoms();
     });
@@ -41,239 +40,24 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     final auth = context.watch<AuthProvider>();
     final fandomProvider = context.watch<FandomProvider>();
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [AppTheme.primary, AppTheme.accent]),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.rocket_launch, size: 20, color: Colors.white),
-            ),
-            const SizedBox(width: 10),
-            const Text('FanSpace', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20)),
-          ],
-        ),
-        actions: [
-          if (auth.isAuthenticated) ...[
-            // Coin Balance Chip
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.amber.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.monetization_on, color: Colors.amber, size: 18),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${auth.currentUser?.coinBalance ?? 0} Coins',
-                    style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-            // User Avatar Menu
-            PopupMenuButton<String>(
-              onSelected: (value) {
-                if (value == 'view_card') {
-                  if (auth.currentUser != null) {
-                    UserCardDialog.show(context, identifier: auth.currentUser!.id);
-                  }
-                } else if (value == 'settings') {
-                  UserSettingsDialog.show(context);
-                } else if (value == 'admin_portal') {
-                  context.push('/admin/permissions');
-                } else if (value == 'logout') {
-                  auth.logout();
-                } else if (value == 'sessions') {
-                  ActiveSessionsDialog.show(context);
-                } else if (value == 'verify_email') {
-                  if (auth.currentUser?.email != null) {
-                    EmailOtpDialog.show(context, email: auth.currentUser!.email);
-                  }
-                } else if (value == 'set_password') {
-                  if (auth.currentUser?.email != null) {
-                    OAuthSetPasswordDialog.show(context, email: auth.currentUser!.email);
-                  }
-                } else if (value == 'delete_account') {
-                  showDialog(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Xác nhận xóa tài khoản?'),
-                      content: const Text('Tài khoản của bạn sẽ bị vô hiệu hóa và đăng xuất khỏi mọi thiết bị.'),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            auth.deleteAccount();
-                          },
-                          child: const Text('Xóa tài khoản'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-              },
-              itemBuilder: (context) => [
-                PopupMenuItem(
-                  enabled: false,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(auth.currentUser?.displayName ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      Text('@${auth.currentUser?.username}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                      if (auth.currentUser?.isEmailVerified == false) ...[
-                        const SizedBox(height: 4),
-                        const Text('⚠️ Chưa xác thực email', style: TextStyle(color: AppTheme.warning, fontSize: 11)),
-                      ],
-                    ],
-                  ),
-                ),
-                const PopupMenuDivider(),
-                const PopupMenuItem(
-                  value: 'view_card',
-                  child: Row(
-                    children: [
-                      Icon(Icons.badge_outlined, color: AppTheme.accent, size: 18),
-                      SizedBox(width: 8),
-                      Text('Xem thẻ hồ sơ cá nhân', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'settings',
-                  child: Row(
-                    children: [
-                      Icon(Icons.manage_accounts_outlined, color: AppTheme.primary, size: 18),
-                      SizedBox(width: 8),
-                      Text('Cài đặt & Hồ sơ cá nhân'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'admin_portal',
-                  child: Row(
-                    children: [
-                      Icon(Icons.admin_panel_settings_outlined, color: Color(0xFF2563EB), size: 18),
-                      SizedBox(width: 8),
-                      Text('Bảng Phân Quyền Admin'),
-                    ],
-                  ),
-                ),
-                const PopupMenuDivider(),
-                const PopupMenuItem(
-                  value: 'sessions',
-                  child: Row(
-                    children: [
-                      Icon(Icons.devices_rounded, size: 18),
-                      SizedBox(width: 8),
-                      Text('Quản lý thiết bị / phiên'),
-                    ],
-                  ),
-                ),
-                if (auth.currentUser?.hasPassword == false)
-                  const PopupMenuItem(
-                    value: 'set_password',
-                    child: Row(
-                      children: [
-                        Icon(Icons.password_rounded, size: 18),
-                        SizedBox(width: 8),
-                        Text('Thiết lập mật khẩu cá nhân'),
-                      ],
-                    ),
-                  ),
-                if (auth.currentUser?.isEmailVerified == false)
-                  const PopupMenuItem(
-                    value: 'verify_email',
-                    child: Row(
-                      children: [
-                        Icon(Icons.mark_email_read_rounded, size: 18, color: AppTheme.primary),
-                        SizedBox(width: 8),
-                        Text('Xác thực Email ngay'),
-                      ],
-                    ),
-                  ),
-                const PopupMenuItem(
-                  value: 'delete_account',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
-                      SizedBox(width: 8),
-                      Text('Xóa tài khoản', style: TextStyle(color: AppTheme.error)),
-                    ],
-                  ),
-                ),
-                const PopupMenuDivider(),
-                const PopupMenuItem(
-                  value: 'logout',
-                  child: Row(
-                    children: [
-                      Icon(Icons.logout, size: 18, color: AppTheme.error),
-                      SizedBox(width: 8),
-                      Text('Đăng xuất', style: TextStyle(color: AppTheme.error)),
-                    ],
-                  ),
-                ),
-              ],
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: CircleAvatar(
-                  backgroundColor: AppTheme.primary,
-                  radius: 18,
-                  backgroundImage: (auth.currentUser?.avatarUrl != null && auth.currentUser!.avatarUrl!.isNotEmpty)
-                      ? NetworkImage(auth.currentUser!.avatarUrl!)
-                      : null,
-                  child: (auth.currentUser?.avatarUrl == null || auth.currentUser!.avatarUrl!.isEmpty)
-                      ? Text(
-                          (auth.currentUser?.displayName.isNotEmpty == true)
-                              ? auth.currentUser!.displayName[0].toUpperCase()
-                              : 'U',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        )
-                      : null,
-                ),
-              ),
-            ),
-          ] else ...[
-            IconButton(
-              tooltip: 'Cổng Quản trị Admin',
-              icon: const Icon(Icons.shield_outlined, color: Color(0xFF2563EB)),
-              onPressed: () => context.push('/admin/login'),
-            ),
-            TextButton.icon(
-              onPressed: () {
-                context.go('/login');
-              },
-              icon: const Icon(Icons.login, color: AppTheme.primary),
-              label: const Text('Đăng nhập', style: TextStyle(color: AppTheme.primary)),
-            ),
-          ],
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: ThemeToggleButton(),
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
+      backgroundColor: palette.background,
+      appBar: const AppTopNavBar(),
       floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppTheme.accent,
+        backgroundColor: AppTheme.primary,
         foregroundColor: Colors.white,
         onPressed: () {
           if (!auth.isAuthenticated) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Vui lòng đăng nhập để tạo không gian Fandom mới!')),
+              const SnackBar(
+                content: Text(
+                  'Vui lòng đăng nhập để tạo không gian Fandom mới!',
+                ),
+              ),
             );
             context.go('/login');
             return;
@@ -281,142 +65,44 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
           context.push('/fandoms/create');
         },
         icon: const Icon(Icons.add),
-        label: const Text('Tạo Fandom mới', style: TextStyle(fontWeight: FontWeight.bold)),
+        label: const Text(
+          'Tạo Fandom mới',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
       body: RefreshIndicator(
-        onRefresh: () async {
-          await fandomProvider.fetchPublicFandoms();
-        },
+        onRefresh: () => fandomProvider.fetchPublicFandoms(),
         child: Column(
           children: [
-            // Search Bar & Filter Header
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-              color: AppTheme.surface,
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Tìm kiếm Fandom theo tên, slug hoặc idol...',
-                      prefixIcon: const Icon(Icons.search, color: AppTheme.textSecondary),
-                      suffixIcon: _searchController.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear, size: 18),
-                              onPressed: () {
-                                _searchController.clear();
-                                fandomProvider.setSearchQuery('');
-                              },
-                            )
-                          : null,
-                      filled: true,
-                      fillColor: AppTheme.background,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-                    ),
-                    onSubmitted: (value) => fandomProvider.setSearchQuery(value),
-                  ),
-                  const SizedBox(height: 10),
-                  // Category Chips Scroll
-                  SizedBox(
-                    height: 38,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: fandomProvider.categories.length,
-                      separatorBuilder: (_, index) => const SizedBox(width: 8),
-                      itemBuilder: (context, index) {
-                        final cat = fandomProvider.categories[index];
-                        final isSelected = fandomProvider.selectedCategory == cat;
-                        return ChoiceChip(
-                          label: Text(cat),
-                          selected: isSelected,
-                          onSelected: (_) => fandomProvider.selectCategory(cat),
-                          selectedColor: AppTheme.primary,
-                          backgroundColor: AppTheme.background,
-                          labelStyle: TextStyle(
-                            color: isSelected ? Colors.white : AppTheme.textSecondary,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            fontSize: 13,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide(
-                              color: isSelected ? AppTheme.primary : AppTheme.surfaceLight,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Sort By Selector Row (FR-02)
-                  Row(
-                    children: [
-                      const Icon(Icons.sort, size: 16, color: AppTheme.textSecondary),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'Sắp xếp:',
-                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 8),
-                      _SortChip(
-                        label: 'Phổ biến',
-                        value: 'popular',
-                        groupValue: fandomProvider.sortBy,
-                        onSelected: (val) => fandomProvider.setSortBy(val),
-                      ),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                        label: 'Mới nhất',
-                        value: 'newest',
-                        groupValue: fandomProvider.sortBy,
-                        onSelected: (val) => fandomProvider.setSortBy(val),
-                      ),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                        label: 'A - Z',
-                        value: 'name_asc',
-                        groupValue: fandomProvider.sortBy,
-                        onSelected: (val) => fandomProvider.setSortBy(val),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+            DirectoryFilterBar(
+              searchController: _searchController,
+              fandomProvider: fandomProvider,
+              authProvider: auth,
             ),
-
-            // Fandom Cards Grid / List
             Expanded(
               child: fandomProvider.isLoading
                   ? const Center(child: CircularProgressIndicator())
                   : fandomProvider.fandoms.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.explore_off_outlined, size: 64, color: AppTheme.textSecondary.withValues(alpha: 0.5)),
-                              const SizedBox(height: 12),
-                              const Text('Chưa có Fandom nào phù hợp', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 6),
-                              const Text('Hãy thử tìm kiếm với từ khóa khác hoặc tạo Fandom đầu tiên!', style: TextStyle(color: AppTheme.textSecondary)),
-                            ],
-                          ),
-                        )
+                      ? _buildEmptyState(context, palette, auth)
                       : LayoutBuilder(
                           builder: (context, constraints) {
-                            // Responsive: Grid on wide screens, List on mobile
-                            final isWide = constraints.maxWidth > 700;
+                            final int crossAxisCount =
+                                constraints.maxWidth >= 1040
+                                    ? 3
+                                    : (constraints.maxWidth >= 680 ? 2 : 1);
                             return GridView.builder(
-                              padding: const EdgeInsets.all(16),
-                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: isWide ? 3 : 1,
-                                childAspectRatio: isWide ? 1.15 : 1.6,
+                              padding: const EdgeInsets.all(20),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: crossAxisCount,
+                                mainAxisExtent: 256,
                                 crossAxisSpacing: 16,
                                 mainAxisSpacing: 16,
                               ),
                               itemCount: fandomProvider.fandoms.length,
                               itemBuilder: (context, index) {
                                 final fandom = fandomProvider.fandoms[index];
-                                return _FandomCard(fandom: fandom);
+                                return FandomCard(fandom: fandom);
                               },
                             );
                           },
@@ -427,259 +113,65 @@ class _PublicDirectoryScreenState extends State<PublicDirectoryScreen> {
       ),
     );
   }
-}
 
-class _SortChip extends StatelessWidget {
-  final String label;
-  final String value;
-  final String groupValue;
-  final ValueChanged<String> onSelected;
-
-  const _SortChip({
-    required this.label,
-    required this.value,
-    required this.groupValue,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isSelected = value == groupValue;
-    return InkWell(
-      onTap: () => onSelected(value),
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isSelected ? AppTheme.primary.withValues(alpha: 0.25) : Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isSelected ? AppTheme.primary : AppTheme.surfaceLight,
-            width: 1,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FandomCard extends StatelessWidget {
-  final FandomSummaryModel fandom;
-  const _FandomCard({required this.fandom});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: InkWell(
-        onTap: () {
-          context.push('/fandoms/${fandom.slug}');
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Banner Header (Cloudinary Real Asset with Fallback)
-            SizedBox(
-              height: 85,
-              width: double.infinity,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (fandom.bannerUrl != null && fandom.bannerUrl!.isNotEmpty)
-                    Image.network(
-                      fandom.bannerUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => _defaultBanner(),
-                    )
-                  else
-                    _defaultBanner(),
-                  // Top Gradient for Badge Readability
-                  Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.black54, Colors.transparent],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.65),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white24, width: 0.5),
-                      ),
-                      child: Text(
-                        fandom.category,
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
-                      ),
-                    ),
-                  ),
-                  if (fandom.admissionMode == 'APPROVAL')
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTheme.accent.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.lock_outline, size: 11, color: Colors.white),
-                            SizedBox(width: 3),
-                            Text('Cần duyệt', style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-
-            // Card Body with Real Cloudinary Avatar
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: AppTheme.surfaceLight, width: 2),
-                          color: AppTheme.primary,
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: (fandom.avatarUrl != null && fandom.avatarUrl!.isNotEmpty)
-                            ? Image.network(
-                                fandom.avatarUrl!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => _avatarFallback(),
-                              )
-                            : _avatarFallback(),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fandom.name,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(
-                              '@${fandom.slug}',
-                              style: const TextStyle(color: AppTheme.accent, fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (fandom.description != null && fandom.description!.isNotEmpty)
-                    Text(
-                      fandom.description!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.4),
-                    ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.people_alt_outlined, size: 15, color: AppTheme.textSecondary),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${fandom.memberCount} thành viên',
-                            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-                          ),
-                        ],
-                      ),
-                      InkWell(
-                        onTap: () {
-                          UserCardDialog.show(
-                            context,
-                            identifier: fandom.ownerId,
-                            fallbackName: fandom.ownerName,
-                          );
-                        },
-                        borderRadius: BorderRadius.circular(6),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppTheme.primary.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.person_outline, size: 12, color: AppTheme.primary),
-                              const SizedBox(width: 3),
-                              Text(
-                                fandom.ownerName,
-                                style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.bold),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _defaultBanner() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.primary.withValues(alpha: 0.8),
-            AppTheme.accent.withValues(alpha: 0.8),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-    );
-  }
-
-  Widget _avatarFallback() {
+  Widget _buildEmptyState(
+    BuildContext context,
+    AppPalette palette,
+    AuthProvider auth,
+  ) {
     return Center(
-      child: Text(
-        fandom.name.isNotEmpty ? fandom.name[0].toUpperCase() : 'F',
-        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.explore_off_outlined,
+              size: 64,
+              color: palette.textSecondary.withValues(alpha: 0.6),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Chưa có Fandom nào phù hợp',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: palette.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Hãy thử tìm kiếm với từ khóa khác, nhập mã mời Fandom riêng tư hoặc tạo Fandom đầu tiên!',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: palette.textSecondary, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      JoinByInviteDialog.show(context, navigateOnSuccess: true),
+                  icon: const Icon(Icons.vpn_key_outlined, size: 16),
+                  label: const Text('Nhập mã mời Fandom'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    if (!auth.isAuthenticated) {
+                      context.go('/login');
+                    } else {
+                      context.push('/fandoms/create');
+                    }
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Tạo Fandom mới'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
