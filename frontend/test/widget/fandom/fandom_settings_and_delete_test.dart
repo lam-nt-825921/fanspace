@@ -128,8 +128,8 @@ void main() {
 
     expect(find.text('Cài đặt Fandom: Sky Music Community'), findsOneWidget);
     expect(find.text('Chế độ hiển thị không gian'), findsOneWidget);
-    expect(find.text('Công khai (Public)'), findsOneWidget);
-    expect(find.text('Vùng nguy hiểm (Danger Zone)'), findsOneWidget);
+    expect(find.text('Chế độ Công khai'), findsOneWidget);
+    expect(find.text('Khu vực nguy hiểm'), findsOneWidget);
     expect(find.text('XÓA VĨNH VIỄN FANDOM NÀY'), findsOneWidget);
 
     // Tap delete button to open confirm dialog
