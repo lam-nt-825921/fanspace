@@ -368,10 +368,12 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
         if combined_bitmask & PermissionBit.MANAGE_CHANNELS:
             permissions.add(Permission.MANAGE_CHANNELS)
             permissions.add(Permission.SEND_ANNOUNCEMENT)
+            permissions.add(Permission.BYPASS_SLOWMODE)
         if combined_bitmask & PermissionBit.MANAGE_ROLES:
             permissions.add(Permission.MANAGE_ROLES)
         if combined_bitmask & PermissionBit.MODERATE_CHAT:
             permissions.add(Permission.MODERATE_CHAT)
+            permissions.add(Permission.BYPASS_SLOWMODE)
         if combined_bitmask & PermissionBit.MUTE_MEMBERS:
             permissions.add(Permission.MUTE_MEMBERS)
         if combined_bitmask & PermissionBit.KICK_MEMBERS:
@@ -382,6 +384,8 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
             permissions.add(Permission.APPROVE_JOIN)
         if combined_bitmask & PermissionBit.CREATE_INVITE:
             permissions.add(Permission.CREATE_INVITE)
+        if combined_bitmask & PermissionBit.BYPASS_SLOWMODE:
+            permissions.add(Permission.BYPASS_SLOWMODE)
 
         if channel_id is not None:
             channel_res = await self._db.execute(
@@ -392,9 +396,14 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
             )
             channel = channel_res.scalar_one_or_none()
             if channel:
-                if channel.required_role_id is not None:
+                if channel.required_role_id is not None and Permission.MANAGE_CHANNELS not in permissions:
                     has_role = any(r.id == channel.required_role_id for r in roles)
                     if not has_role:
+                        return set()
+
+                if channel.is_membership_only and Permission.MANAGE_CHANNELS not in permissions:
+                    has_membership = any(r.is_membership_tier for r in roles)
+                    if not has_membership:
                         return set()
 
                 if channel.is_announcement:

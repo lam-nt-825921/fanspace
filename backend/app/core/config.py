@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     PAYOS_API_KEY: str = ""
     PAYOS_CHECKSUM_KEY: str = ""
 
+    # SePay Payment Gateway & Webhook Configuration (FR-09)
+    SEPAY_WEBHOOK_SECRET: str = "sepay_fanspace_secret_2026"
+    SEPAY_PAYMENT_CODE_PREFIX: str = "DH"
+    SEPAY_ORDER_TTL_MINUTES: int = 15
+    SEPAY_GRACE_PERIOD_MINUTES: int = 5
+
     LIVEKIT_URL: str = ""
     LIVEKIT_API_KEY: str = ""
     LIVEKIT_API_SECRET: str = ""

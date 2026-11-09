@@ -254,6 +254,10 @@ class RoleOut(BaseModel):
     permissions_bitmask: int = Field(..., description="Bitmask quyền hạn")
     is_preset_mod: bool = Field(default=False, description="Là vai trò Mod định sẵn")
     is_membership_tier: bool = Field(default=False, description="Là gói Membership trả phí")
+    tier_level: int | None = Field(default=None, description="Cấp bậc gói hội viên (1-4)")
+    icon_url: str | None = Field(default=None, description="Icon/Huy hiệu gói hội viên")
+    price_fiat_vnd: int | None = Field(default=None, description="Đơn giá gói hội viên (VNĐ)")
+    duration_days: int | None = Field(default=None, description="Thời hạn gói hội viên (ngày)")
     created_at: datetime = Field(..., description="Thời điểm tạo")
 
     model_config = {"from_attributes": True}
