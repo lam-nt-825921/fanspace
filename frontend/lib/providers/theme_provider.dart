@@ -5,7 +5,8 @@ class ThemeProvider extends ChangeNotifier {
   static const String _storageKey = 'theme_mode';
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
-  ThemeMode _themeMode = ThemeMode.dark;
+  // Default to high-contrast Daylight (Light) theme so UI is bright and readable out of the box
+  ThemeMode _themeMode = ThemeMode.light;
 
   ThemeMode get themeMode => _themeMode;
 
@@ -18,17 +19,16 @@ class ThemeProvider extends ChangeNotifier {
   Future<void> _loadThemeFromStorage() async {
     try {
       final savedMode = await _storage.read(key: _storageKey);
-      if (savedMode == 'light') {
-        _themeMode = ThemeMode.light;
+      if (savedMode == 'dark') {
+        _themeMode = ThemeMode.dark;
       } else if (savedMode == 'system') {
         _themeMode = ThemeMode.system;
       } else {
-        _themeMode = ThemeMode.dark;
+        _themeMode = ThemeMode.light;
       }
       notifyListeners();
     } catch (_) {
-      // Default to dark on error
-      _themeMode = ThemeMode.dark;
+      _themeMode = ThemeMode.light;
     }
   }
 
@@ -36,9 +36,9 @@ class ThemeProvider extends ChangeNotifier {
     _themeMode = mode;
     notifyListeners();
     try {
-      String value = 'dark';
-      if (mode == ThemeMode.light) {
-        value = 'light';
+      String value = 'light';
+      if (mode == ThemeMode.dark) {
+        value = 'dark';
       } else if (mode == ThemeMode.system) {
         value = 'system';
       }
