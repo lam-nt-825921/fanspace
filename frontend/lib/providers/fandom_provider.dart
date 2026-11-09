@@ -579,5 +579,295 @@ class FandomProvider extends ChangeNotifier {
       return {'success': false, 'error': 'Lỗi kết nối: $e'};
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Monetization, Membership Tiers & SePay 3-Way Reconciliation (FR-09)
+  // ---------------------------------------------------------------------------
+
+  Future<FandomBankAccountModel?> fetchBankAccount(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/bank-account',
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomBankAccountModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> upsertBankAccount(
+    String identifier, {
+    required String bankCode,
+    required String accountNumber,
+    required String accountName,
+    bool isActive = true,
+  }) async {
+    try {
+      final response = await _apiClient.dio.put(
+        '/api/v1/fandoms/$identifier/bank-account',
+        data: {
+          'bank_code': bankCode.trim(),
+          'account_number': accountNumber.trim(),
+          'account_name': accountName.trim().toUpperCase(),
+          'is_active': isActive,
+        },
+      );
+      return {
+        'success': true,
+        'bank_account': FandomBankAccountModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể lưu tài khoản ngân hàng.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<FandomMembershipsDataModel> fetchMemberships(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/memberships',
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomMembershipsDataModel.fromJson(response.data);
+      }
+    } catch (_) {}
+    return FandomMembershipsDataModel(fandomId: identifier);
+  }
+
+  Future<Map<String, dynamic>> createMembershipTier(
+    String identifier, {
+    required String name,
+    int tierLevel = 1,
+    String colorHex = '#FFD700',
+    int priority = 50,
+    int permissionsBitmask = 0,
+    required int priceFiatVnd,
+    int durationDays = 30,
+    String? iconUrl,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/memberships',
+        data: {
+          'name': name.trim(),
+          'tier_level': tierLevel,
+          'color_hex': colorHex,
+          'priority': priority,
+          'permissions_bitmask': permissionsBitmask,
+          'price_fiat_vnd': priceFiatVnd,
+          'duration_days': durationDays,
+          if (iconUrl != null && iconUrl.trim().isNotEmpty)
+            'icon_url': iconUrl.trim(),
+        },
+      );
+      return {
+        'success': true,
+        'tier': MembershipTierModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể tạo gói Hội viên.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateMembershipTier(
+    String identifier,
+    String roleId, {
+    String? name,
+    int? tierLevel,
+    String? colorHex,
+    int? priority,
+    int? permissionsBitmask,
+    int? priceFiatVnd,
+    int? durationDays,
+    String? iconUrl,
+  }) async {
+    try {
+      final Map<String, dynamic> payload = {};
+      if (name != null) payload['name'] = name.trim();
+      if (tierLevel != null) payload['tier_level'] = tierLevel;
+      if (colorHex != null) payload['color_hex'] = colorHex;
+      if (priority != null) payload['priority'] = priority;
+      if (permissionsBitmask != null) {
+        payload['permissions_bitmask'] = permissionsBitmask;
+      }
+      if (priceFiatVnd != null) payload['price_fiat_vnd'] = priceFiatVnd;
+      if (durationDays != null) payload['duration_days'] = durationDays;
+      if (iconUrl != null) payload['icon_url'] = iconUrl.trim();
+
+      final response = await _apiClient.dio.put(
+        '/api/v1/fandoms/$identifier/memberships/$roleId',
+        data: payload,
+      );
+      return {
+        'success': true,
+        'tier': MembershipTierModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể cập nhật gói Hội viên.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteMembershipTier(
+    String identifier,
+    String roleId,
+  ) async {
+    try {
+      final response = await _apiClient.dio.delete(
+        '/api/v1/fandoms/$identifier/memberships/$roleId',
+      );
+      return {
+        'success': true,
+        'message': response.data?['message'] ?? 'Đã xóa gói Hội viên.',
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể xóa gói Hội viên.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> createPaymentOrder(
+    String identifier,
+    String roleId,
+  ) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/orders',
+        data: {'role_id': roleId},
+      );
+      return {
+        'success': true,
+        'order': PaymentOrderModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể khởi tạo đơn thanh toán.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<PaymentOrderModel?> fetchPaymentOrder(String orderCode) async {
+    try {
+      final response = await _apiClient.dio.get('/api/v1/orders/$orderCode');
+      if (response.data is Map<String, dynamic>) {
+        return PaymentOrderModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> cancelPaymentOrder(String orderCode) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/orders/$orderCode/cancel',
+      );
+      return {
+        'success': true,
+        'order': PaymentOrderModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể hủy đơn hàng.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> simulateSepayWebhook({
+    required String orderCode,
+    int? transferAmount,
+    String? customContent,
+    String gateway = 'MBBank',
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/billing/sepay-simulate',
+        data: {
+          'order_code': orderCode,
+          'transfer_amount': ?transferAmount,
+          'custom_content': ?customContent,
+          'gateway': gateway,
+        },
+      );
+      return {
+        'success': true,
+        'data': response.data,
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể giả lập Webhook SePay.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<FandomLedgerModel?> fetchFandomLedger(
+    String identifier, {
+    String? statusFilter,
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/transactions',
+        queryParameters: statusFilter != null && statusFilter.isNotEmpty
+            ? {'status_filter': statusFilter}
+            : null,
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomLedgerModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> resolveTransactionManually(
+    String identifier,
+    String transactionId, {
+    required String orderCode,
+    String? note,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/transactions/$transactionId/resolve',
+        data: {
+          'order_code': orderCode.trim().toUpperCase(),
+          if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+        },
+      );
+      return {
+        'success': true,
+        'transaction': PaymentTransactionModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể đối soát thủ công giao dịch.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
 }
+
 

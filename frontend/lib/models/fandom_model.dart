@@ -283,6 +283,7 @@ class FandomPermissionBit {
   static const int approveJoin = 1 << 12;
   static const int createInvite = 1 << 13;
   static const int administrator = 1 << 14;
+  static const int bypassSlowmode = 1 << 15;
 
   static const List<Map<String, dynamic>> allPermissions = [
     {"bit": readMessages, "name": "Đọc tin nhắn", "desc": "Xem nội dung trong các kênh chat"},
@@ -299,6 +300,7 @@ class FandomPermissionBit {
     {"bit": banMembers, "name": "Cấm vĩnh viễn", "desc": "Ban vĩnh viễn thành viên khỏi fandom"},
     {"bit": approveJoin, "name": "Xét duyệt đơn gia nhập", "desc": "Duyệt hoặc từ chối đơn xét tuyển"},
     {"bit": createInvite, "name": "Tạo Link mời", "desc": "Tạo mã mời có giới hạn tham gia fandom"},
+    {"bit": bypassSlowmode, "name": "Miễn Slow-mode", "desc": "Không bị giới hạn thời gian chờ giữa các tin nhắn"},
     {"bit": administrator, "name": "Quản trị viên tối cao", "desc": "Toàn quyền quản trị (bỏ qua mọi rào cản)"},
   ];
 }
@@ -312,6 +314,10 @@ class RoleModel {
   final int permissionsBitmask;
   final bool isPresetMod;
   final bool isMembershipTier;
+  final int? tierLevel;
+  final String? iconUrl;
+  final int? priceFiatVnd;
+  final int? durationDays;
   final DateTime? createdAt;
 
   RoleModel({
@@ -323,6 +329,10 @@ class RoleModel {
     this.permissionsBitmask = 0,
     this.isPresetMod = false,
     this.isMembershipTier = false,
+    this.tierLevel,
+    this.iconUrl,
+    this.priceFiatVnd,
+    this.durationDays,
     this.createdAt,
   });
 
@@ -339,6 +349,10 @@ class RoleModel {
       permissionsBitmask: json['permissions_bitmask'] ?? 0,
       isPresetMod: json['is_preset_mod'] ?? false,
       isMembershipTier: json['is_membership_tier'] ?? false,
+      tierLevel: json['tier_level'],
+      iconUrl: json['icon_url'],
+      priceFiatVnd: json['price_fiat_vnd'],
+      durationDays: json['duration_days'],
       createdAt: json['created_at'] != null ? DateTime.tryParse(json['created_at']) : null,
     );
   }
@@ -437,5 +451,332 @@ class FandomInviteModel {
     );
   }
 }
+
+class FandomBankAccountModel {
+  final String id;
+  final String fandomId;
+  final String bankCode;
+  final String accountNumber;
+  final String accountName;
+  final bool isActive;
+  final DateTime? updatedAt;
+
+  FandomBankAccountModel({
+    required this.id,
+    required this.fandomId,
+    required this.bankCode,
+    required this.accountNumber,
+    required this.accountName,
+    this.isActive = true,
+    this.updatedAt,
+  });
+
+  factory FandomBankAccountModel.fromJson(Map<String, dynamic> json) {
+    return FandomBankAccountModel(
+      id: json['id']?.toString() ?? '',
+      fandomId: json['fandom_id']?.toString() ?? '',
+      bankCode: json['bank_code'] ?? 'MBBank',
+      accountNumber: json['account_number'] ?? '',
+      accountName: json['account_name'] ?? '',
+      isActive: json['is_active'] ?? true,
+      updatedAt: json['updated_at'] != null
+          ? DateTime.tryParse(json['updated_at'].toString())
+          : null,
+    );
+  }
+}
+
+class MembershipTierModel {
+  final String id;
+  final String fandomId;
+  final String name;
+  final int tierLevel;
+  final String colorHex;
+  final int priority;
+  final int permissionsBitmask;
+  final int priceFiatVnd;
+  final int durationDays;
+  final String? iconUrl;
+  final bool isOwned;
+  final DateTime? ownedExpiresAt;
+  final DateTime? createdAt;
+
+  MembershipTierModel({
+    required this.id,
+    required this.fandomId,
+    required this.name,
+    this.tierLevel = 1,
+    this.colorHex = '#FFD700',
+    this.priority = 50,
+    this.permissionsBitmask = 0,
+    required this.priceFiatVnd,
+    this.durationDays = 30,
+    this.iconUrl,
+    this.isOwned = false,
+    this.ownedExpiresAt,
+    this.createdAt,
+  });
+
+  bool hasPermission(int bit) =>
+      (permissionsBitmask & bit) != 0 ||
+      (permissionsBitmask & FandomPermissionBit.administrator) != 0;
+
+  factory MembershipTierModel.fromJson(Map<String, dynamic> json) {
+    return MembershipTierModel(
+      id: json['id']?.toString() ?? '',
+      fandomId: json['fandom_id']?.toString() ?? '',
+      name: json['name'] ?? '',
+      tierLevel: json['tier_level'] ?? 1,
+      colorHex: json['color_hex'] ?? '#FFD700',
+      priority: json['priority'] ?? 50,
+      permissionsBitmask: json['permissions_bitmask'] ?? 0,
+      priceFiatVnd: json['price_fiat_vnd'] ?? 0,
+      durationDays: json['duration_days'] ?? 30,
+      iconUrl: json['icon_url'],
+      isOwned: json['is_owned'] ?? false,
+      ownedExpiresAt: json['owned_expires_at'] != null
+          ? DateTime.tryParse(json['owned_expires_at'].toString())
+          : null,
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
+          : null,
+    );
+  }
+}
+
+class FandomMembershipsDataModel {
+  final String fandomId;
+  final bool bankConfigured;
+  final FandomBankAccountModel? bankAccount;
+  final List<MembershipTierModel> tiers;
+
+  FandomMembershipsDataModel({
+    required this.fandomId,
+    this.bankConfigured = false,
+    this.bankAccount,
+    this.tiers = const [],
+  });
+
+  factory FandomMembershipsDataModel.fromJson(Map<String, dynamic> json) {
+    final rawTiers = json['tiers'];
+    return FandomMembershipsDataModel(
+      fandomId: json['fandom_id']?.toString() ?? '',
+      bankConfigured: json['bank_configured'] ?? false,
+      bankAccount: json['bank_account'] is Map<String, dynamic>
+          ? FandomBankAccountModel.fromJson(json['bank_account'])
+          : null,
+      tiers: rawTiers is List
+          ? rawTiers
+              .whereType<Map<String, dynamic>>()
+              .map(MembershipTierModel.fromJson)
+              .toList()
+          : const [],
+    );
+  }
+}
+
+class PaymentTransactionModel {
+  final String id;
+  final int sepayTransactionId;
+  final String? orderId;
+  final String? orderCode;
+  final String? userId;
+  final String? fandomId;
+  final String gateway;
+  final String transactionDate;
+  final String accountNumber;
+  final String transferType;
+  final int transferAmount;
+  final String? code;
+  final String content;
+  final String? referenceCode;
+  final String reconciliationStatus;
+  final String? auditNote;
+  final DateTime? createdAt;
+
+  PaymentTransactionModel({
+    required this.id,
+    required this.sepayTransactionId,
+    this.orderId,
+    this.orderCode,
+    this.userId,
+    this.fandomId,
+    required this.gateway,
+    required this.transactionDate,
+    required this.accountNumber,
+    this.transferType = 'in',
+    required this.transferAmount,
+    this.code,
+    required this.content,
+    this.referenceCode,
+    required this.reconciliationStatus,
+    this.auditNote,
+    this.createdAt,
+  });
+
+  bool get isDiscrepant => const {
+        'UNDERPAID',
+        'OVERPAID',
+        'UNMATCHED_ORDER',
+        'EXPIRED_ORDER',
+      }.contains(reconciliationStatus);
+
+  factory PaymentTransactionModel.fromJson(Map<String, dynamic> json) {
+    return PaymentTransactionModel(
+      id: json['id']?.toString() ?? '',
+      sepayTransactionId: json['sepay_transaction_id'] ?? 0,
+      orderId: json['order_id']?.toString(),
+      orderCode: json['order_code']?.toString(),
+      userId: json['user_id']?.toString(),
+      fandomId: json['fandom_id']?.toString(),
+      gateway: json['gateway'] ?? 'MBBank',
+      transactionDate: json['transaction_date'] ?? '',
+      accountNumber: json['account_number'] ?? '',
+      transferType: json['transfer_type'] ?? 'in',
+      transferAmount: json['transfer_amount'] ?? 0,
+      code: json['code']?.toString(),
+      content: json['content'] ?? '',
+      referenceCode: json['reference_code']?.toString(),
+      reconciliationStatus: json['reconciliation_status'] ?? 'UNMATCHED_ORDER',
+      auditNote: json['audit_note']?.toString(),
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
+          : null,
+    );
+  }
+}
+
+class PaymentOrderModel {
+  final String id;
+  final String orderCode;
+  final String userId;
+  final String fandomId;
+  final String roleId;
+  final String roleName;
+  final int amountVnd;
+  final int paidAmountVnd;
+  final int remainingAmountVnd;
+  final int durationDays;
+  final String bankCode;
+  final String accountNumber;
+  final String accountName;
+  final String qrUrl;
+  final String status;
+  final DateTime expiresAt;
+  final DateTime? paidAt;
+  final DateTime? memberRoleExpiresAt;
+  final DateTime? createdAt;
+  final List<PaymentTransactionModel> transactions;
+
+  PaymentOrderModel({
+    required this.id,
+    required this.orderCode,
+    required this.userId,
+    required this.fandomId,
+    required this.roleId,
+    required this.roleName,
+    required this.amountVnd,
+    this.paidAmountVnd = 0,
+    required this.remainingAmountVnd,
+    this.durationDays = 30,
+    required this.bankCode,
+    required this.accountNumber,
+    required this.accountName,
+    required this.qrUrl,
+    required this.status,
+    required this.expiresAt,
+    this.paidAt,
+    this.memberRoleExpiresAt,
+    this.createdAt,
+    this.transactions = const [],
+  });
+
+  bool get isCompleted => status == 'PAID' || status == 'OVERPAID';
+  bool get isUnderpaid => status == 'UNDERPAID';
+  bool get isPending => status == 'PENDING';
+
+  factory PaymentOrderModel.fromJson(Map<String, dynamic> json) {
+    final rawTxs = json['transactions'];
+    final amount = (json['amount_vnd'] ?? 0) as int;
+    final paid = (json['paid_amount_vnd'] ?? 0) as int;
+    return PaymentOrderModel(
+      id: json['id']?.toString() ?? '',
+      orderCode: json['order_code'] ?? '',
+      userId: json['user_id']?.toString() ?? '',
+      fandomId: json['fandom_id']?.toString() ?? '',
+      roleId: json['role_id']?.toString() ?? '',
+      roleName: json['role_name'] ?? '',
+      amountVnd: amount,
+      paidAmountVnd: paid,
+      remainingAmountVnd:
+          json['remaining_amount_vnd'] ?? (amount > paid ? amount - paid : 0),
+      durationDays: json['duration_days'] ?? 30,
+      bankCode: json['bank_code'] ?? 'MBBank',
+      accountNumber: json['account_number'] ?? '',
+      accountName: json['account_name'] ?? '',
+      qrUrl: json['qr_url'] ?? '',
+      status: json['status'] ?? 'PENDING',
+      expiresAt: DateTime.tryParse(json['expires_at']?.toString() ?? '') ??
+          DateTime.now().add(const Duration(minutes: 15)),
+      paidAt: json['paid_at'] != null
+          ? DateTime.tryParse(json['paid_at'].toString())
+          : null,
+      memberRoleExpiresAt: json['member_role_expires_at'] != null
+          ? DateTime.tryParse(json['member_role_expires_at'].toString())
+          : null,
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
+          : null,
+      transactions: rawTxs is List
+          ? rawTxs
+              .whereType<Map<String, dynamic>>()
+              .map(PaymentTransactionModel.fromJson)
+              .toList()
+          : const [],
+    );
+  }
+}
+
+class FandomLedgerModel {
+  final String fandomId;
+  final int totalRevenueVnd;
+  final int paidOrdersCount;
+  final int discrepantTransactionsCount;
+  final List<PaymentOrderModel> orders;
+  final List<PaymentTransactionModel> transactions;
+
+  FandomLedgerModel({
+    required this.fandomId,
+    this.totalRevenueVnd = 0,
+    this.paidOrdersCount = 0,
+    this.discrepantTransactionsCount = 0,
+    this.orders = const [],
+    this.transactions = const [],
+  });
+
+  factory FandomLedgerModel.fromJson(Map<String, dynamic> json) {
+    final rawOrders = json['orders'];
+    final rawTxs = json['transactions'];
+    return FandomLedgerModel(
+      fandomId: json['fandom_id']?.toString() ?? '',
+      totalRevenueVnd: json['total_revenue_vnd'] ?? 0,
+      paidOrdersCount: json['paid_orders_count'] ?? 0,
+      discrepantTransactionsCount: json['discrepant_transactions_count'] ?? 0,
+      orders: rawOrders is List
+          ? rawOrders
+              .whereType<Map<String, dynamic>>()
+              .map(PaymentOrderModel.fromJson)
+              .toList()
+          : const [],
+      transactions: rawTxs is List
+          ? rawTxs
+              .whereType<Map<String, dynamic>>()
+              .map(PaymentTransactionModel.fromJson)
+              .toList()
+          : const [],
+    );
+  }
+}
+
 
 

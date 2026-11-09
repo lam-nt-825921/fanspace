@@ -19,6 +19,7 @@ from app.modules.identity.router import auth_router, users_router
 from app.modules.fandom.router import fandom_router
 from app.modules.chat.router import chat_router, messages_router
 from app.modules.media.router import media_router
+from app.modules.billing.router import billing_router
 
 
 
@@ -112,6 +113,7 @@ app.include_router(fandom_router)
 app.include_router(chat_router)
 app.include_router(messages_router)
 app.include_router(media_router)
+app.include_router(billing_router)
 
 
 @app.get(

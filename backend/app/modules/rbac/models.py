@@ -24,6 +24,7 @@ class PermissionBit:
     APPROVE_JOIN    = 1 << 12  # 4096 (Duyệt đơn gia nhập)
     CREATE_INVITE   = 1 << 13  # 8192 (Tạo link mời)
     ADMINISTRATOR   = 1 << 14  # 16384 (Toàn quyền quản trị)
+    BYPASS_SLOWMODE = 1 << 15  # 32768 (Miễn giới hạn tốc độ chat Slow-mode)
 
     ALL_PERMISSIONS = [
         {"bit": READ_MESSAGES, "code": "READ_MESSAGES", "name": "Đọc tin nhắn", "description": "Xem nội dung trong các kênh chat"},
@@ -40,6 +41,7 @@ class PermissionBit:
         {"bit": BAN_MEMBERS, "code": "BAN_MEMBERS", "name": "Cấm vĩnh viễn", "description": "Ban vĩnh viễn thành viên khỏi fandom"},
         {"bit": APPROVE_JOIN, "code": "APPROVE_JOIN", "name": "Xét duyệt đơn gia nhập", "description": "Duyệt hoặc từ chối đơn xét tuyển"},
         {"bit": CREATE_INVITE, "code": "CREATE_INVITE", "name": "Tạo Link mời", "description": "Tạo mã mời có giới hạn tham gia fandom"},
+        {"bit": BYPASS_SLOWMODE, "code": "BYPASS_SLOWMODE", "name": "Miễn Slow-mode", "description": "Không bị giới hạn thời gian chờ giữa các tin nhắn"},
         {"bit": ADMINISTRATOR, "code": "ADMINISTRATOR", "name": "Quản trị viên tối cao", "description": "Toàn quyền quản trị (bỏ qua mọi rào cản)"},
     ]
 
