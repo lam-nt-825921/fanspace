@@ -22,6 +22,7 @@ from app.modules.fandom.schemas import (
     FandomDeleteResponse,
     FandomSortBy,
     FandomSummary,
+    FandomProfileUpdate,
     FandomVisibilityUpdate,
     FandomJoinResponse,
     FandomLeaveResponse,
@@ -394,6 +395,46 @@ async def review_join_request(
         request_id=request_id,
         current_user=current_user,
         action=data.action,
+        redis=redis,
+    )
+
+
+@fandom_router.patch(
+    "/{identifier}/profile",
+    response_model=FandomDetail,
+    summary="Cập nhật hồ sơ và giao diện Fandom (Chủ sở hữu)",
+    description="""
+    Cho phép Chủ sở hữu (Owner) cập nhật thông tin hồ sơ và nhận diện của Fandom:
+    - **Thông tin cơ bản**: Tên fandom (`name`), danh mục (`category`), bài giới thiệu (`description`).
+    - **Hình ảnh thương hiệu**: Ảnh đại diện (`avatar_url`), ảnh bìa banner (`banner_url`).
+    - **Bộ sưu tập minh họa (`illustration_urls`)**: Tối đa 5 tệp, tối đa 1 short video.
+    - **Chính sách**: Chế độ tham gia (`admission_mode`: 'OPEN' hoặc 'APPROVAL'), nội quy điều khoản (`rules_tos`).
+    """,
+    responses={
+        400: {"description": "Dữ liệu cập nhật hoặc số lượng tệp minh họa không hợp lệ"},
+        403: {"description": "Chỉ Chủ sở hữu mới có quyền chỉnh sửa hồ sơ Fandom"},
+        404: {"description": "Không tìm thấy Fandom"},
+    },
+)
+@fandom_router.patch(
+    "/{identifier}",
+    response_model=FandomDetail,
+    summary="Cập nhật hồ sơ và giao diện Fandom (alias)",
+    include_in_schema=False,
+)
+async def update_fandom_profile(
+    identifier: str,
+    data: FandomProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Updates profile metadata, media, admission mode, and rules for a fandom community."""
+    return await FandomService.update_fandom_profile(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
         redis=redis,
     )
 
