@@ -270,6 +270,76 @@ class FandomProvider extends ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>> updateFandomProfile(
+    String identifier, {
+    String? name,
+    String? description,
+    String? category,
+    String? avatarUrl,
+    String? bannerUrl,
+    List<String>? illustrationUrls,
+    String? admissionMode,
+    String? rulesTos,
+  }) async {
+    try {
+      final payload = <String, dynamic>{};
+      if (name != null) payload['name'] = name.trim();
+      if (description != null) payload['description'] = description.trim();
+      if (category != null) payload['category'] = category.trim();
+      if (avatarUrl != null) payload['avatar_url'] = avatarUrl.trim();
+      if (bannerUrl != null) payload['banner_url'] = bannerUrl.trim();
+      if (illustrationUrls != null) payload['illustration_urls'] = illustrationUrls;
+      if (admissionMode != null) payload['admission_mode'] = admissionMode;
+      if (rulesTos != null) payload['rules_tos'] = rulesTos.trim();
+
+      final response = await _apiClient.dio.patch(
+        '/api/v1/fandoms/$identifier/profile',
+        data: payload,
+      );
+
+      final updated = FandomDetailModel.fromJson(response.data as Map<String, dynamic>);
+      await fetchPublicFandoms();
+      await fetchMyFandoms();
+      return {
+        'success': true,
+        'fandom': updated,
+        'message': 'Đã cập nhật hồ sơ Fandom thành công.',
+      };
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'] ?? 'Không thể cập nhật hồ sơ Fandom.';
+      return {'success': false, 'error': detail};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<String?> uploadFandomMedia({
+    required List<int> bytes,
+    required String filename,
+    required String target,
+    String? fandomId,
+  }) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': MultipartFile.fromBytes(bytes, filename: filename),
+        'target': target,
+        'entity_id': ?fandomId,
+      });
+
+      final response = await _apiClient.dio.post(
+        '/api/v1/media/upload',
+        data: formData,
+      );
+
+      if (response.data != null && response.data['url'] != null) {
+        return response.data['url'] as String;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>> deleteFandom(
     String identifier,
     String password,

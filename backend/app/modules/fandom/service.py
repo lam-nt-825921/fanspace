@@ -29,6 +29,7 @@ from app.modules.fandom.schemas import (
     FandomDeleteResponse,
     FandomSortBy,
     FandomSummary,
+    FandomProfileUpdate,
     FandomVisibilityUpdate,
     FandomJoinResponse,
     FandomLeaveResponse,
@@ -1096,6 +1097,82 @@ class FandomService:
             quota_used=len(managed_summaries),
             max_quota=MAX_FANDOMS_PER_OWNER,
         )
+
+    @classmethod
+    async def update_fandom_profile(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        data: FandomProfileUpdate,
+        redis: aioredis.Redis | None = None,
+    ) -> FandomDetail:
+        """Updates profile metadata, branding media, admission mode, and rules for a fandom community.
+
+        Args:
+            db (AsyncSession): Active database session.
+            identifier (str): Fandom UUID or unique slug.
+            current_user (User): Authenticated user requesting the update.
+            data (FandomProfileUpdate): Profile update payload.
+            redis (aioredis.Redis | None): Optional Redis client for cache eviction.
+
+        Returns:
+            FandomDetail: Refreshed fandom profile detail.
+
+        Raises:
+            HTTPException: 403 Forbidden if requester is not the Fandom Owner.
+            HTTPException: 400 Bad Request if illustration URLs exceed limit or contain >1 video.
+            HTTPException: 404 Not Found if fandom does not exist.
+        """
+        fandom = await cls._resolve_fandom(db, identifier)
+        if fandom.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chỉ Chủ sở hữu (Owner) mới có quyền chỉnh sửa hồ sơ Fandom.",
+            )
+
+        if data.illustration_urls is not None:
+            if len(data.illustration_urls) > 5:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bộ sưu tập minh họa tối đa 5 tệp phương tiện.",
+                )
+            video_extensions = (".mp4", ".webm", "/video/upload/")
+            video_count = sum(
+                1 for url in data.illustration_urls
+                if any(ext in url.lower() for ext in video_extensions)
+            )
+            if video_count > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bộ sưu tập minh họa chỉ được chứa tối đa 1 video ngắn.",
+                )
+            fandom.illustration_urls = data.illustration_urls
+
+        if data.name is not None and data.name.strip():
+            fandom.name = data.name.strip()
+        if data.description is not None:
+            fandom.description = data.description.strip() or None
+        if data.category is not None and data.category.strip():
+            fandom.category = data.category.strip()
+        if data.avatar_url is not None:
+            fandom.avatar_url = data.avatar_url.strip() or None
+        if data.banner_url is not None:
+            fandom.banner_url = data.banner_url.strip() or None
+        if data.admission_mode is not None:
+            fandom.admission_mode = data.admission_mode
+        if data.rules_tos is not None:
+            fandom.rules_tos = data.rules_tos.strip() or None
+
+        await db.commit()
+        await db.refresh(fandom)
+
+        await cls.invalidate_fandom_caches(redis, slug=fandom.slug)
+        if redis:
+            await redis.delete(f"cache:user:fandoms:{current_user.id}")
+            await redis.delete(f"cache:fandom:preview:{fandom.slug.lower()}")
+
+        return await cls.get_preview(db, fandom.slug, current_user=current_user, redis=redis)
 
     @classmethod
     async def update_fandom_visibility(

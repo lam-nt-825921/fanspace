@@ -201,6 +201,43 @@ class FandomJoinRequestReview(BaseModel):
 MAX_FANDOMS_PER_OWNER: int = 5
 
 
+class FandomProfileUpdate(BaseModel):
+    """Payload for updating public profile and appearance metadata of a fandom."""
+    name: str | None = Field(
+        None,
+        min_length=2,
+        max_length=100,
+        description="Tên cộng đồng fandom mới",
+        examples=["Sơn Tùng M-TP Fanclub"],
+    )
+    description: str | None = Field(
+        None,
+        max_length=5000,
+        description="Mô tả giới thiệu chi tiết về cộng đồng",
+    )
+    category: str | None = Field(
+        None,
+        max_length=50,
+        description="Chủ đề phân loại của fandom",
+    )
+    avatar_url: str | None = Field(None, description="URL ảnh đại diện mới của fandom")
+    banner_url: str | None = Field(None, description="URL ảnh bìa banner mới của fandom")
+    illustration_urls: list[str] | None = Field(
+        None,
+        description="Danh sách URL ảnh hoặc video ngắn minh họa (tối đa 5 tệp, tối đa 1 video ngắn)",
+    )
+    admission_mode: str | None = Field(
+        None,
+        pattern=r"^(OPEN|APPROVAL)$",
+        description="Chế độ gia nhập: 'OPEN' (tự do) hoặc 'APPROVAL' (phê duyệt)",
+    )
+    rules_tos: str | None = Field(
+        None,
+        max_length=10000,
+        description="Nội quy và điều khoản nội bộ của fandom",
+    )
+
+
 class FandomVisibilityUpdate(BaseModel):
     """Payload for updating public visibility of a fandom space."""
     is_public: bool = Field(..., description="Trạng thái hiển thị công khai (True) hoặc riêng tư (False)")

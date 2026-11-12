@@ -130,7 +130,12 @@ void main() {
     expect(find.text('Chế độ hiển thị không gian'), findsOneWidget);
     expect(find.text('Chế độ Công khai'), findsOneWidget);
     expect(find.text('Khu vực nguy hiểm'), findsOneWidget);
-    expect(find.text('XÓA VĨNH VIỄN FANDOM NÀY'), findsOneWidget);
+    // Scroll down to reveal Danger Zone delete button
+    await tester.drag(
+      find.byType(SingleChildScrollView).last,
+      const Offset(0, -1200),
+    );
+    await tester.pumpAndSettle();
 
     // Tap delete button to open confirm dialog
     await tester.tap(find.text('XÓA VĨNH VIỄN FANDOM NÀY'));
