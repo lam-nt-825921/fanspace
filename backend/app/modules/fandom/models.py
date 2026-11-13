@@ -127,3 +127,34 @@ class FandomJoinRequest(Base):
     user = relationship("User", foreign_keys=[user_id])
     reviewer = relationship("User", foreign_keys=[reviewed_by])
 
+
+class FandomEmoji(Base):
+    """Custom Fandom Emoji or Sticker unlocked by Membership Tier level."""
+
+    __tablename__ = "fandom_emojis"
+    __table_args__ = (
+        UniqueConstraint("fandom_id", "code", name="uq_fandom_emoji_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    fandom_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fandoms.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(16), default="EMOJI", nullable=False)
+    image_url: Mapped[str] = mapped_column(Text, nullable=False)
+    min_tier_level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    fandom = relationship("Fandom")
+    creator = relationship("User", foreign_keys=[created_by])
+
+

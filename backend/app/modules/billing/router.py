@@ -24,6 +24,7 @@ from app.modules.billing.schemas import (
     SepayWebhookResponse,
 )
 from app.modules.billing.service import BillingService
+from app.modules.fandom.emoji_service import FandomEmojiListOut, FandomEmojiService
 from app.modules.identity.models import User
 from app.modules.identity.service import get_current_user, get_optional_current_user
 
@@ -336,4 +337,28 @@ async def get_fandom_leaderboard(
         current_user=current_user,
         limit=limit,
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Fandom Exclusive Emojis & Stickers
+# ---------------------------------------------------------------------------
+
+
+@billing_router.get(
+    "/fandoms/{identifier}/emojis",
+    response_model=FandomEmojiListOut,
+    summary="Lấy danh sách bộ Emoji & Sticker độc quyền của Fandom kèm trạng thái mở khóa theo gói Hội viên",
+)
+async def list_fandom_emojis(
+    identifier: str,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lists all custom Emojis and Stickers in a Fandom and whether the caller has unlocked each item."""
+    return await FandomEmojiService.list_fandom_emojis(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+    )
+
 

@@ -6,7 +6,13 @@ from app.modules.billing.models import (
     PaymentOrder,
     PaymentTransaction,
 )
-from app.modules.fandom.models import Fandom, FandomMember, FandomInvite, FandomJoinRequest
+from app.modules.fandom.models import (
+    Fandom,
+    FandomMember,
+    FandomInvite,
+    FandomJoinRequest,
+    FandomEmoji,
+)
 from app.modules.rbac.models import Role, MemberRole
 from app.modules.chat.models import Channel, Message
 
@@ -23,6 +29,7 @@ __all__ = [
     "FandomMember",
     "FandomInvite",
     "FandomJoinRequest",
+    "FandomEmoji",
     "Role",
     "MemberRole",
     "Channel",

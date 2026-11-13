@@ -46,6 +46,44 @@ class PermissionBit:
     ]
 
 
+class MembershipPerkBit:
+    """Dedicated bitmask constants for Membership-exclusive features (separated from RBAC PermissionBit)."""
+
+    EXCLUSIVE_EMOJIS = 1 << 0        # 1: Mở khóa Emoji độc quyền của Fandom
+    EXCLUSIVE_STICKERS = 1 << 1      # 2: Mở khóa Sticker độc quyền của Fandom
+    CUSTOM_NAME_COLOR = 1 << 2       # 4: Huy hiệu & màu tên Hội viên nổi bật
+    PRIORITY_CHANNEL_ACCESS = 1 << 3 # 8: Ưu tiên truy cập kênh Hội viên & miễn Slow-mode
+
+    DEFAULT_TIER_PERKS = EXCLUSIVE_EMOJIS | EXCLUSIVE_STICKERS | CUSTOM_NAME_COLOR | PRIORITY_CHANNEL_ACCESS
+
+    ALL_PERKS = [
+        {
+            "bit": EXCLUSIVE_EMOJIS,
+            "code": "EXCLUSIVE_EMOJIS",
+            "name": "Emoji Độc Quyền Fandom",
+            "description": "Sử dụng các biểu cảm (Emoji) độc quyền ứng với cấp độ gói Hội viên",
+        },
+        {
+            "bit": EXCLUSIVE_STICKERS,
+            "code": "EXCLUSIVE_STICKERS",
+            "name": "Sticker Độc Quyền Fandom",
+            "description": "Gửi bộ nhãn dán (Sticker) lớn độc quyền của Fandom trong khung chat",
+        },
+        {
+            "bit": CUSTOM_NAME_COLOR,
+            "code": "CUSTOM_NAME_COLOR",
+            "name": "Huy Hiệu & Màu Tên VIP",
+            "description": "Hiển thị màu tên riêng và huy hiệu Hội viên nổi bật khi trò chuyện",
+        },
+        {
+            "bit": PRIORITY_CHANNEL_ACCESS,
+            "code": "PRIORITY_CHANNEL_ACCESS",
+            "name": "Đặc Quyền Kênh Hội Viên",
+            "description": "Truy cập các kênh giới hạn theo cấp Hội viên và ưu tiên tốc độ chat",
+        },
+    ]
+
+
 PRESET_MODS = {
     "CO_HOST": {
         "name": "Co-Host",
@@ -112,6 +150,9 @@ class Role(Base):
     color_hex: Mapped[str] = mapped_column(String(7), default="#808080", nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     permissions_bitmask: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    membership_perks_bitmask: Mapped[int] = mapped_column(
+        BigInteger, default=MembershipPerkBit.DEFAULT_TIER_PERKS, nullable=False
+    )
     is_preset_mod: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_membership_tier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     tier_level: Mapped[int | None] = mapped_column(Integer, nullable=True)

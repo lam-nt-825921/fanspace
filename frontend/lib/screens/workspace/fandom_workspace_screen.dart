@@ -25,6 +25,7 @@ import 'fandom_management_dialog.dart';
 import 'widgets/channel_header_bar.dart';
 import 'widgets/chat_message_composer.dart';
 import 'widgets/chat_message_item.dart';
+import 'widgets/fandom_emoji_sticker_picker.dart';
 import 'widgets/voice_channel_view.dart';
 import 'widgets/workspace_leaderboard_view.dart';
 import 'widgets/workspace_sidebar.dart';
@@ -51,6 +52,7 @@ class FandomWorkspaceScreen extends StatefulWidget {
   final FandomDetailModel? initialFandom;
   final FandomChannelsDataModel? initialChannelsData;
   final Map<String, List<MessageModel>>? initialMessagesByChannel;
+  final List<FandomEmojiModel>? initialEmojis;
   final SendMessageOverride? onSendMessageOverride;
 
   const FandomWorkspaceScreen({
@@ -59,6 +61,7 @@ class FandomWorkspaceScreen extends StatefulWidget {
     this.initialFandom,
     this.initialChannelsData,
     this.initialMessagesByChannel,
+    this.initialEmojis,
     this.onSendMessageOverride,
   });
 
@@ -73,6 +76,8 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
 
   FandomDetailModel? _fandom;
   FandomChannelsDataModel? _channelsData;
+  List<FandomEmojiModel> _fandomEmojis = [];
+  int _userHighestTierLevel = 0;
   WorkspaceSection _activeSection = WorkspaceSection.welcome;
   ChannelModel? _selectedChannel;
   bool _rulesAcknowledged = false;
@@ -93,6 +98,9 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialEmojis != null) {
+      _fandomEmojis = List<FandomEmojiModel>.from(widget.initialEmojis!);
+    }
     if (widget.initialMessagesByChannel != null) {
       for (final entry in widget.initialMessagesByChannel!.entries) {
         _messagesByChannel[entry.key] = List<MessageModel>.from(entry.value);
@@ -126,6 +134,16 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           await _api.dio.get('/api/v1/fandoms/${widget.slug}/preview');
       final channelsRes =
           await _api.dio.get('/api/v1/fandoms/${widget.slug}/channels');
+      FandomEmojiListModel? emojiData;
+      try {
+        final emojiRes =
+            await _api.dio.get('/api/v1/fandoms/${widget.slug}/emojis');
+        if (emojiRes.data is Map<String, dynamic>) {
+          emojiData = FandomEmojiListModel.fromJson(
+            emojiRes.data as Map<String, dynamic>,
+          );
+        }
+      } catch (_) {}
 
       if (!mounted) return;
       final fandom = FandomDetailModel.fromJson(
@@ -138,6 +156,10 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
       setState(() {
         _fandom = fandom;
         _channelsData = channelsData;
+        if (emojiData != null) {
+          _fandomEmojis = emojiData.items;
+          _userHighestTierLevel = emojiData.userHighestTierLevel;
+        }
         if (_selectedChannel != null) {
           final updated = channelsData.channels
               .where((c) => c.id == _selectedChannel!.id)
@@ -584,6 +606,36 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
     );
   }
 
+  Future<void> _openEmojiStickerPicker(ChannelModel channel) async {
+    await FandomEmojiStickerPicker.show(
+      context,
+      items: _fandomEmojis,
+      userHighestTierLevel: _userHighestTierLevel,
+      onSelectEmoji: (emoji) {
+        final currentText = _messageController.text;
+        final spacer =
+            currentText.isNotEmpty && !currentText.endsWith(' ') ? ' ' : '';
+        _messageController.text = '$currentText$spacer${emoji.shortcode} ';
+        _messageController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _messageController.text.length),
+        );
+      },
+      onSelectSticker: (sticker) async {
+        setState(() {
+          _pendingAttachments.add(
+            MessageAttachmentModel(
+              url: sticker.imageUrl,
+              type: 'STICKER',
+              filename: sticker.shortcode,
+            ),
+          );
+        });
+        await _handleSendMessage(channel);
+      },
+      onOpenMembershipTiers: _showMembershipTiersModal,
+    );
+  }
+
   Future<void> _confirmDeleteChannel(ChannelModel channel) async {
     final palette = context.palette;
     final confirmed = await showDialog<bool>(
@@ -906,6 +958,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
               });
             },
             onPickAttachment: _handlePickAndUploadAttachment,
+            onOpenEmojiStickerPicker: () => _openEmojiStickerPicker(channel),
             onSendMessage: () => _handleSendMessage(channel),
           ),
       ],
@@ -992,6 +1045,10 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
       }
     }
 
+    final customEmojisByCode = <String, FandomEmojiModel>{
+      for (final e in _fandomEmojis) e.code.toLowerCase(): e,
+    };
+
     return ListView.builder(
       controller: _messageScrollController,
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -1024,6 +1081,7 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           message: msg,
           threadReplies: threadReplies,
           isThreadExpanded: isExpanded,
+          customEmojisByCode: customEmojisByCode,
           onToggleThread: () {
             setState(() {
               if (_collapsedThreadIds.contains(msg.id)) {

@@ -145,5 +145,9 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE member_roles ADD COLUMN IF NOT EXISTS streak_started_at TIMESTAMP WITH TIME ZONE NULL;")
         )
+        await conn.execute(
+            text("ALTER TABLE roles ADD COLUMN IF NOT EXISTS membership_perks_bitmask BIGINT DEFAULT 15 NOT NULL;")
+        )
+
 
 

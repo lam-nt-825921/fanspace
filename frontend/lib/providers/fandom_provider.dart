@@ -956,7 +956,22 @@ class FandomProvider extends ChangeNotifier {
       return null;
     }
   }
+
+  Future<FandomEmojiListModel?> fetchFandomEmojis(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/emojis',
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomEmojiListModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
+
 
 
 

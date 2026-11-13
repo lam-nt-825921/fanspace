@@ -17,6 +17,7 @@ class ChatMessageComposer extends StatelessWidget {
   final VoidCallback onCancelReply;
   final ValueChanged<int> onRemoveAttachment;
   final VoidCallback onPickAttachment;
+  final VoidCallback? onOpenEmojiStickerPicker;
   final VoidCallback onSendMessage;
 
   const ChatMessageComposer({
@@ -30,6 +31,7 @@ class ChatMessageComposer extends StatelessWidget {
     required this.onCancelReply,
     required this.onRemoveAttachment,
     required this.onPickAttachment,
+    this.onOpenEmojiStickerPicker,
     required this.onSendMessage,
   });
 
@@ -192,6 +194,16 @@ class ChatMessageComposer extends StatelessWidget {
                           color: palette.textSecondary,
                         ),
                   onPressed: isUploadingAttachment ? null : onPickAttachment,
+                ),
+              if (onOpenEmojiStickerPicker != null)
+                IconButton(
+                  key: const Key('btn_open_emoji_sticker_picker'),
+                  tooltip: 'Emoji & Sticker Độc Quyền Fandom',
+                  icon: const Icon(
+                    Icons.emoji_emotions_outlined,
+                    color: Colors.amber,
+                  ),
+                  onPressed: onOpenEmojiStickerPicker,
                 ),
               Expanded(
                 child: TextField(

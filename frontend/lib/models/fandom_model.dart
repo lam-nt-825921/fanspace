@@ -915,6 +915,96 @@ class FandomLeaderboardModel {
   }
 }
 
+class FandomEmojiModel {
+  final String id;
+  final String fandomId;
+  final String code;
+  final String shortcode;
+  final String name;
+  final String assetType; // 'EMOJI' or 'STICKER'
+  final String imageUrl;
+  final int minTierLevel;
+  final String minTierName;
+  final bool isUnlocked;
+  final DateTime? createdAt;
+
+  FandomEmojiModel({
+    required this.id,
+    required this.fandomId,
+    required this.code,
+    required this.shortcode,
+    required this.name,
+    this.assetType = 'EMOJI',
+    required this.imageUrl,
+    this.minTierLevel = 1,
+    this.minTierName = 'Hội viên Cấp 1',
+    this.isUnlocked = false,
+    this.createdAt,
+  });
+
+  bool get isSticker => assetType.toUpperCase() == 'STICKER';
+
+  factory FandomEmojiModel.fromJson(Map<String, dynamic> json) {
+    final codeStr = json['code']?.toString() ?? '';
+    final lvl = json['min_tier_level'] ?? 1;
+    return FandomEmojiModel(
+      id: json['id']?.toString() ?? '',
+      fandomId: json['fandom_id']?.toString() ?? '',
+      code: codeStr,
+      shortcode: json['shortcode']?.toString() ?? ':$codeStr:',
+      name: json['name']?.toString() ?? codeStr,
+      assetType: (json['asset_type']?.toString() ?? 'EMOJI').toUpperCase(),
+      imageUrl: json['image_url']?.toString() ?? '',
+      minTierLevel: lvl,
+      minTierName: json['min_tier_name']?.toString() ?? 'Hội viên Cấp $lvl',
+      isUnlocked: json['is_unlocked'] ?? false,
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
+          : null,
+    );
+  }
+}
+
+class FandomEmojiListModel {
+  final String fandomId;
+  final int userHighestTierLevel;
+  final int userPerksBitmask;
+  final List<FandomEmojiModel> items;
+
+  FandomEmojiListModel({
+    required this.fandomId,
+    this.userHighestTierLevel = 0,
+    this.userPerksBitmask = 0,
+    this.items = const [],
+  });
+
+  List<FandomEmojiModel> get emojis =>
+      items.where((e) => !e.isSticker).toList();
+
+  List<FandomEmojiModel> get stickers =>
+      items.where((e) => e.isSticker).toList();
+
+  Map<String, FandomEmojiModel> get byCode => {
+        for (final e in items) e.code.toLowerCase(): e,
+      };
+
+  factory FandomEmojiListModel.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    return FandomEmojiListModel(
+      fandomId: json['fandom_id']?.toString() ?? '',
+      userHighestTierLevel: json['user_highest_tier_level'] ?? 0,
+      userPerksBitmask: json['user_perks_bitmask'] ?? 0,
+      items: rawItems is List
+          ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(FandomEmojiModel.fromJson)
+              .toList()
+          : const [],
+    );
+  }
+}
+
+
 
 
 

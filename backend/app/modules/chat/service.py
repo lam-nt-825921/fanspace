@@ -24,6 +24,7 @@ from app.modules.chat.schemas import (
     ChannelUpdate,
     FandomChannelsListResponse,
 )
+from app.modules.fandom.emoji_service import FandomEmojiService
 from app.modules.fandom.models import Fandom
 from app.modules.identity.models import User
 
@@ -852,7 +853,10 @@ class MessageService:
                 detail="Nội dung tin nhắn hoặc tệp đính kèm không được để trống.",
             )
 
-        if data.attachments and not eval_ctx.has(Permission.ATTACH_FILES):
+        has_non_sticker_attachment = any(
+            (item.type or "").upper() != "STICKER" for item in data.attachments
+        )
+        if has_non_sticker_attachment and not eval_ctx.has(Permission.ATTACH_FILES):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Bạn không có quyền đính kèm tệp hoặc hình ảnh trong kênh này.",
@@ -863,6 +867,14 @@ class MessageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
             )
+
+        await FandomEmojiService.validate_message_emojis_and_stickers(
+            db=db,
+            fandom=fandom,
+            current_user=current_user,
+            content=cleaned_content,
+            attachments=data.attachments,
+        )
 
         reply_preview: MessageReplyPreviewOut | None = None
         if data.reply_to_id is not None:
@@ -950,6 +962,14 @@ class MessageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
             )
+
+        await FandomEmojiService.validate_message_emojis_and_stickers(
+            db=db,
+            fandom=fandom,
+            current_user=current_user,
+            content=cleaned,
+            attachments=None,
+        )
 
         message.content = cleaned
         message.is_edited = True
@@ -1070,6 +1090,12 @@ class MessageService:
             else:
                 current_reactions.pop(emoji, None)
         else:
+            await FandomEmojiService.validate_reaction_emoji(
+                db=db,
+                fandom=fandom,
+                current_user=current_user,
+                emoji_str=emoji,
+            )
             users_for_emoji.append(user_id_str)
             current_reactions[emoji] = users_for_emoji
 
