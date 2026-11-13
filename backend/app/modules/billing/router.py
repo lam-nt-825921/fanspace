@@ -24,7 +24,13 @@ from app.modules.billing.schemas import (
     SepayWebhookResponse,
 )
 from app.modules.billing.service import BillingService
-from app.modules.fandom.emoji_service import FandomEmojiListOut, FandomEmojiService
+from app.modules.fandom.emoji_service import (
+    FandomEmojiCreate,
+    FandomEmojiListOut,
+    FandomEmojiOut,
+    FandomEmojiService,
+    FandomEmojiUpdate,
+)
 from app.modules.identity.models import User
 from app.modules.identity.service import get_current_user, get_optional_current_user
 
@@ -358,6 +364,68 @@ async def list_fandom_emojis(
     return await FandomEmojiService.list_fandom_emojis(
         db=db,
         identifier=identifier,
+        current_user=current_user,
+    )
+
+
+@billing_router.post(
+    "/fandoms/{identifier}/emojis",
+    response_model=FandomEmojiOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Tạo mới Emoji hoặc Sticker độc quyền cho Fandom và chọn cấp gói Hội viên mở khóa (Chủ Fandom)",
+)
+async def create_fandom_emoji(
+    identifier: str,
+    data: FandomEmojiCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Creates a new Fandom-exclusive Emoji or Sticker."""
+    return await FandomEmojiService.create_fandom_emoji(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@billing_router.put(
+    "/fandoms/{identifier}/emojis/{emoji_id}",
+    response_model=FandomEmojiOut,
+    summary="Cập nhật Emoji/Sticker độc quyền hoặc đổi cấp gói Hội viên mở khóa (Chủ Fandom)",
+)
+async def update_fandom_emoji(
+    identifier: str,
+    emoji_id: uuid.UUID,
+    data: FandomEmojiUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Updates an existing Fandom-exclusive Emoji or Sticker."""
+    return await FandomEmojiService.update_fandom_emoji(
+        db=db,
+        identifier=identifier,
+        emoji_id=emoji_id,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@billing_router.delete(
+    "/fandoms/{identifier}/emojis/{emoji_id}",
+    summary="Xóa Emoji hoặc Sticker độc quyền của Fandom (Chủ Fandom)",
+)
+async def delete_fandom_emoji(
+    identifier: str,
+    emoji_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Deletes an existing Fandom-exclusive Emoji or Sticker."""
+    return await FandomEmojiService.delete_fandom_emoji(
+        db=db,
+        identifier=identifier,
+        emoji_id=emoji_id,
         current_user=current_user,
     )
 

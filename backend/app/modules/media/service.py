@@ -42,6 +42,7 @@ IMAGE_TARGETS = {
     MediaTarget.USER_BANNER,
     MediaTarget.FANDOM_AVATAR,
     MediaTarget.FANDOM_BANNER,
+    MediaTarget.FANDOM_EMOJI,
 }
 
 HYBRID_TARGETS = {
@@ -159,7 +160,7 @@ class MediaService:
             )
 
         # Enforce size quota per target and resource type
-        if target in (MediaTarget.USER_AVATAR, MediaTarget.FANDOM_AVATAR):
+        if target in (MediaTarget.USER_AVATAR, MediaTarget.FANDOM_AVATAR, MediaTarget.FANDOM_EMOJI):
             max_bytes = settings.MEDIA_MAX_AVATAR_BYTES
             max_label = f"{max_bytes // (1024 * 1024)} MB"
         elif target in (MediaTarget.USER_BANNER, MediaTarget.FANDOM_BANNER):
@@ -242,6 +243,9 @@ class MediaService:
         if target == MediaTarget.FANDOM_ILLUSTRATION:
             scope = f"fandoms/{ent_str}" if entity_id else f"users/{uid_str}"
             return f"fanspace/{scope}/illustrations/{unique_token}", False
+        if target == MediaTarget.FANDOM_EMOJI:
+            scope = f"fandoms/{ent_str}" if entity_id else f"users/{uid_str}"
+            return f"fanspace/{scope}/emojis/{unique_token}", False
 
         # CHAT_ATTACHMENT
         scope = f"channels/{ent_str}" if entity_id else f"users/{uid_str}"

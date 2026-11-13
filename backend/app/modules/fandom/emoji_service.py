@@ -245,6 +245,175 @@ class FandomEmojiService:
             ],
         )
 
+    @staticmethod
+    async def _require_owner_or_admin(
+        db: AsyncSession, fandom: Fandom, current_user: User
+    ) -> None:
+        """Verifies that `current_user` is the Fandom Owner or holds ADMINISTRATOR permission."""
+        if fandom.owner_id == current_user.id:
+            return
+        res = await db.execute(
+            select(Role)
+            .join(MemberRole, MemberRole.role_id == Role.id)
+            .where(
+                MemberRole.fandom_id == fandom.id,
+                MemberRole.user_id == current_user.id,
+            )
+        )
+        for role in res.scalars().all():
+            if int(role.permissions_bitmask or 0) & PermissionBit.ADMINISTRATOR:
+                return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chỉ Chủ sở hữu hoặc Quản trị viên Fandom mới có quyền thiết lập Emoji & Sticker độc quyền.",
+        )
+
+    @classmethod
+    async def create_fandom_emoji(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        current_user: User,
+        data: FandomEmojiCreate,
+    ) -> FandomEmojiOut:
+        """Creates a new Fandom Emoji or Sticker and sets its required membership tier level (1..4)."""
+        fandom = await FandomService._resolve_fandom(db, identifier)
+        await cls._require_owner_or_admin(db, fandom, current_user)
+
+        normalized_code = normalize_emoji_code(data.code)
+        dup_res = await db.execute(
+            select(FandomEmoji).where(
+                FandomEmoji.fandom_id == fandom.id,
+                func.lower(FandomEmoji.code) == normalized_code,
+            )
+        )
+        if dup_res.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Mã shortcode ':{normalized_code}:' đã tồn tại trong Fandom này.",
+            )
+
+        asset_type: EmojiAssetType = (
+            "STICKER" if (data.asset_type or "").upper() == "STICKER" else "EMOJI"
+        )
+        new_emoji = FandomEmoji(
+            fandom_id=fandom.id,
+            code=normalized_code,
+            name=data.name.strip(),
+            asset_type=asset_type,
+            image_url=data.image_url.strip(),
+            min_tier_level=int(data.min_tier_level or 1),
+            created_by=current_user.id,
+        )
+        db.add(new_emoji)
+        await db.commit()
+        await db.refresh(new_emoji)
+
+        tier_names = await cls._load_tier_names_by_level(db, fandom.id)
+        return cls._serialize_emoji(
+            new_emoji,
+            tier_names=tier_names,
+            is_owner=True,
+            user_tier_level=4,
+            user_perks_bitmask=int(MembershipPerkBit.DEFAULT_TIER_PERKS),
+        )
+
+    @classmethod
+    async def update_fandom_emoji(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        emoji_id: uuid.UUID,
+        current_user: User,
+        data: FandomEmojiUpdate,
+    ) -> FandomEmojiOut:
+        """Updates an existing Fandom Emoji or Sticker (shortcode, name, asset_type, or min_tier_level)."""
+        fandom = await FandomService._resolve_fandom(db, identifier)
+        await cls._require_owner_or_admin(db, fandom, current_user)
+
+        res = await db.execute(
+            select(FandomEmoji).where(
+                FandomEmoji.id == emoji_id,
+                FandomEmoji.fandom_id == fandom.id,
+            )
+        )
+        emoji = res.scalar_one_or_none()
+        if emoji is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy Emoji/Sticker trong Fandom này.",
+            )
+
+        if data.code is not None:
+            normalized_code = normalize_emoji_code(data.code)
+            if normalized_code != emoji.code.lower():
+                dup_res = await db.execute(
+                    select(FandomEmoji).where(
+                        FandomEmoji.fandom_id == fandom.id,
+                        func.lower(FandomEmoji.code) == normalized_code,
+                        FandomEmoji.id != emoji.id,
+                    )
+                )
+                if dup_res.scalar_one_or_none() is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Mã shortcode ':{normalized_code}:' đã tồn tại trong Fandom này.",
+                    )
+                emoji.code = normalized_code
+
+        if data.name is not None:
+            emoji.name = data.name.strip()
+        if data.asset_type is not None:
+            emoji.asset_type = (
+                "STICKER" if data.asset_type.upper() == "STICKER" else "EMOJI"
+            )
+        if data.image_url is not None:
+            emoji.image_url = data.image_url.strip()
+        if data.min_tier_level is not None:
+            emoji.min_tier_level = int(data.min_tier_level)
+
+        await db.commit()
+        await db.refresh(emoji)
+
+        tier_names = await cls._load_tier_names_by_level(db, fandom.id)
+        return cls._serialize_emoji(
+            emoji,
+            tier_names=tier_names,
+            is_owner=True,
+            user_tier_level=4,
+            user_perks_bitmask=int(MembershipPerkBit.DEFAULT_TIER_PERKS),
+        )
+
+    @classmethod
+    async def delete_fandom_emoji(
+        cls,
+        db: AsyncSession,
+        identifier: str,
+        emoji_id: uuid.UUID,
+        current_user: User,
+    ) -> dict[str, str]:
+        """Deletes a Fandom Emoji or Sticker."""
+        fandom = await FandomService._resolve_fandom(db, identifier)
+        await cls._require_owner_or_admin(db, fandom, current_user)
+
+        res = await db.execute(
+            select(FandomEmoji).where(
+                FandomEmoji.id == emoji_id,
+                FandomEmoji.fandom_id == fandom.id,
+            )
+        )
+        emoji = res.scalar_one_or_none()
+        if emoji is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy Emoji/Sticker trong Fandom này.",
+            )
+
+        code = emoji.code
+        await db.delete(emoji)
+        await db.commit()
+        return {"message": f"Đã xóa Emoji/Sticker ':{code}:' thành công."}
+
     @classmethod
     async def validate_message_emojis_and_stickers(
         cls,

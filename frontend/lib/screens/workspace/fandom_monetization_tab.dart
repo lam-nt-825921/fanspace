@@ -11,10 +11,16 @@ import 'management/dialogs/monetization_dialogs.dart';
 
 class FandomMonetizationTab extends StatefulWidget {
   final FandomDetailModel fandom;
+  final FandomMembershipsDataModel? initialMembershipsData;
+  final List<FandomEmojiModel>? initialEmojis;
+  final FandomLedgerModel? initialLedger;
 
   const FandomMonetizationTab({
     super.key,
     required this.fandom,
+    this.initialMembershipsData,
+    this.initialEmojis,
+    this.initialLedger,
   });
 
   @override
@@ -25,6 +31,7 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
   bool _isLoading = true;
   bool _isSavingBank = false;
   FandomMembershipsDataModel? _membershipsData;
+  List<FandomEmojiModel> _emojis = const [];
   FandomLedgerModel? _ledger;
   final String _ledgerFilter = 'ALL';
 
@@ -45,7 +52,24 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
   @override
   void initState() {
     super.initState();
-    _loadMonetizationData();
+    if (widget.initialMembershipsData != null ||
+        widget.initialEmojis != null ||
+        widget.initialLedger != null) {
+      _membershipsData = widget.initialMembershipsData;
+      _emojis = widget.initialEmojis ?? const [];
+      _ledger = widget.initialLedger;
+      if (_membershipsData?.bankAccount != null) {
+        final b = _membershipsData!.bankAccount!;
+        if (_bankCodeList.contains(b.bankCode)) {
+          _selectedBankCode = b.bankCode;
+        }
+        _accNumberCtrl.text = b.accountNumber;
+        _accNameCtrl.text = b.accountName;
+      }
+      _isLoading = false;
+    } else {
+      _loadMonetizationData();
+    }
   }
 
   @override
@@ -64,14 +88,17 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
         widget.fandom.id,
         statusFilter: _ledgerFilter == 'ALL' ? null : _ledgerFilter,
       ),
+      provider.fetchFandomEmojis(widget.fandom.id),
     ]);
     if (!mounted) return;
     final memData = results[0] as FandomMembershipsDataModel;
     final ledgerData = results[1] as FandomLedgerModel?;
+    final emojiData = results[2] as FandomEmojiListModel?;
 
     setState(() {
       _membershipsData = memData;
       _ledger = ledgerData;
+      _emojis = emojiData?.items ?? const [];
       if (memData.bankAccount != null) {
         final b = memData.bankAccount!;
         if (_bankCodeList.contains(b.bankCode)) {
@@ -146,6 +173,8 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
           _buildBankConfigCard(context),
           const SizedBox(height: 20),
           _buildMembershipTiersSection(context, tiers),
+          const SizedBox(height: 20),
+          _buildEmojiStickerSetupSection(context, tiers),
           const SizedBox(height: 20),
           _buildAuditLedgerSection(context, ledger),
         ],
@@ -387,6 +416,197 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
     );
   }
 
+  Widget _buildEmojiStickerSetupSection(
+    BuildContext context,
+    List<MembershipTierModel> tiers,
+  ) {
+    final palette = context.palette;
+
+    return Container(
+      key: const Key('section_emoji_sticker_setup'),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.surfaceElevated,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  '3. Bộ Emoji & Sticker Độc quyền (${_emojis.length} mục)',
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                key: const Key('btn_add_fandom_emoji'),
+                onPressed: () => UpsertFandomEmojiDialog.show(
+                  context,
+                  fandomId: widget.fandom.id,
+                  tiers: tiers,
+                  onSaved: _loadMonetizationData,
+                ),
+                icon: const Icon(Icons.add_reaction_outlined, size: 16),
+                label: const Text('Thêm Emoji / Sticker'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Tải lên cả 2 loại Emoji (nhỏ inline) và Sticker (ảnh lớn). Chủ Fandom tự quyết định cấp độ Gói Hội viên (Tier 1..4) để mở khóa từng mục.',
+            style: TextStyle(color: palette.textSecondary, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          if (_emojis.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                'Chưa có Emoji hoặc Sticker độc quyền nào. Hãy bấm "Thêm Emoji / Sticker" để thiết lập bộ biểu cảm riêng cho Hội viên.',
+                style: TextStyle(color: palette.textSecondary, fontSize: 13),
+              ),
+            )
+          else
+            ..._emojis.map(
+              (item) => Container(
+                key: Key('setup_emoji_row_${item.code}'),
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: palette.surface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: palette.border),
+                ),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: Image.network(
+                        item.imageUrl,
+                        width: 34,
+                        height: 34,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) => Icon(
+                          item.isSticker
+                              ? Icons.sticky_note_2_outlined
+                              : Icons.emoji_emotions_outlined,
+                          size: 26,
+                          color: AppTheme.primary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text(
+                                item.name,
+                                style: TextStyle(
+                                  color: palette.textPrimary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                item.shortcode,
+                                style: TextStyle(
+                                  color: palette.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: (item.isSticker
+                                          ? Colors.purpleAccent
+                                          : AppTheme.primary)
+                                      .withValues(alpha: 0.16),
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
+                                child: Text(
+                                  item.isSticker ? 'STICKER' : 'EMOJI',
+                                  style: TextStyle(
+                                    color: item.isSticker
+                                        ? Colors.purpleAccent
+                                        : AppTheme.primary,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Mở khóa từ: Cấp ${item.minTierLevel} (${item.minTierName})',
+                            style: const TextStyle(
+                              color: Colors.amber,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      key: Key('btn_edit_emoji_${item.code}'),
+                      tooltip: 'Đổi cấp độ gói hoặc sửa thông tin',
+                      icon: Icon(
+                        Icons.edit_outlined,
+                        color: palette.textSecondary,
+                        size: 20,
+                      ),
+                      onPressed: () => UpsertFandomEmojiDialog.show(
+                        context,
+                        fandomId: widget.fandom.id,
+                        tiers: tiers,
+                        existing: item,
+                        onSaved: _loadMonetizationData,
+                      ),
+                    ),
+                    IconButton(
+                      key: Key('btn_delete_emoji_${item.code}'),
+                      tooltip: 'Xóa Emoji/Sticker',
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        color: AppTheme.error,
+                        size: 20,
+                      ),
+                      onPressed: () async {
+                        await context
+                            .read<FandomProvider>()
+                            .deleteFandomEmoji(widget.fandom.id, item.id);
+                        _loadMonetizationData();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAuditLedgerSection(
     BuildContext context,
     FandomLedgerModel? ledger,
@@ -409,7 +629,7 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
             children: [
               Expanded(
                 child: Text(
-                  '3. Lịch sử giao dịch & Đối soát doanh thu',
+                  '4. Lịch sử giao dịch & Đối soát doanh thu',
                   style: TextStyle(
                     color: palette.textPrimary,
                     fontSize: 15,
