@@ -289,6 +289,10 @@ class RoleOut(BaseModel):
     color_hex: str = Field(..., description="Mã màu HEX")
     priority: int = Field(..., description="Độ ưu tiên thứ bậc")
     permissions_bitmask: int = Field(..., description="Bitmask quyền hạn")
+    membership_perks_bitmask: int = Field(
+        default=15,
+        description="Bitmask đặc quyền Hội viên tách biệt",
+    )
     is_preset_mod: bool = Field(default=False, description="Là vai trò Mod định sẵn")
     is_membership_tier: bool = Field(default=False, description="Là gói Membership trả phí")
     tier_level: int | None = Field(default=None, description="Cấp bậc gói hội viên (1-4)")

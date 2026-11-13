@@ -305,6 +305,43 @@ class FandomPermissionBit {
   ];
 }
 
+/// Dedicated bitmask flags for paid Membership-exclusive perks (separated from RBAC permissions).
+class FandomMembershipPerkBit {
+  static const int exclusiveEmojis = 1 << 0; // 1
+  static const int exclusiveStickers = 1 << 1; // 2
+  static const int customNameColor = 1 << 2; // 4
+  static const int priorityChannelAccess = 1 << 3; // 8
+
+  static const int defaultAll =
+      exclusiveEmojis |
+      exclusiveStickers |
+      customNameColor |
+      priorityChannelAccess;
+
+  static const List<Map<String, dynamic>> allPerks = [
+    {
+      "bit": exclusiveEmojis,
+      "name": "Emoji Độc Quyền Fandom",
+      "desc": "Cho phép sử dụng các Emoji độc quyền ứng với cấp độ gói",
+    },
+    {
+      "bit": exclusiveStickers,
+      "name": "Sticker Độc Quyền Fandom",
+      "desc": "Cho phép gửi bộ Sticker cỡ lớn độc quyền trong khung chat",
+    },
+    {
+      "bit": customNameColor,
+      "name": "Huy Hiệu & Màu Tên VIP",
+      "desc": "Hiển thị huy hiệu và màu tên nổi bật cho Hội viên",
+    },
+    {
+      "bit": priorityChannelAccess,
+      "name": "Đặc Quyền Kênh Hội Viên",
+      "desc": "Truy cập kênh VIP theo cấp gói & miễn Slow-mode khi được bật",
+    },
+  ];
+}
+
 class RoleModel {
   final String id;
   final String fandomId;
@@ -312,6 +349,7 @@ class RoleModel {
   final String colorHex;
   final int priority;
   final int permissionsBitmask;
+  final int membershipPerksBitmask;
   final bool isPresetMod;
   final bool isMembershipTier;
   final int? tierLevel;
@@ -327,6 +365,7 @@ class RoleModel {
     this.colorHex = '#808080',
     this.priority = 0,
     this.permissionsBitmask = 0,
+    this.membershipPerksBitmask = FandomMembershipPerkBit.defaultAll,
     this.isPresetMod = false,
     this.isMembershipTier = false,
     this.tierLevel,
@@ -347,6 +386,8 @@ class RoleModel {
       colorHex: json['color_hex'] ?? '#808080',
       priority: json['priority'] ?? 0,
       permissionsBitmask: json['permissions_bitmask'] ?? 0,
+      membershipPerksBitmask:
+          json['membership_perks_bitmask'] ?? FandomMembershipPerkBit.defaultAll,
       isPresetMod: json['is_preset_mod'] ?? false,
       isMembershipTier: json['is_membership_tier'] ?? false,
       tierLevel: json['tier_level'],
@@ -494,6 +535,7 @@ class MembershipTierModel {
   final String colorHex;
   final int priority;
   final int permissionsBitmask;
+  final int membershipPerksBitmask;
   final int priceFiatVnd;
   final int durationDays;
   final String? iconUrl;
@@ -509,6 +551,7 @@ class MembershipTierModel {
     this.colorHex = '#FFD700',
     this.priority = 50,
     this.permissionsBitmask = 0,
+    this.membershipPerksBitmask = FandomMembershipPerkBit.defaultAll,
     required this.priceFiatVnd,
     this.durationDays = 30,
     this.iconUrl,
@@ -521,6 +564,8 @@ class MembershipTierModel {
       (permissionsBitmask & bit) != 0 ||
       (permissionsBitmask & FandomPermissionBit.administrator) != 0;
 
+  bool hasPerk(int bit) => (membershipPerksBitmask & bit) != 0;
+
   factory MembershipTierModel.fromJson(Map<String, dynamic> json) {
     return MembershipTierModel(
       id: json['id']?.toString() ?? '',
@@ -530,6 +575,8 @@ class MembershipTierModel {
       colorHex: json['color_hex'] ?? '#FFD700',
       priority: json['priority'] ?? 50,
       permissionsBitmask: json['permissions_bitmask'] ?? 0,
+      membershipPerksBitmask:
+          json['membership_perks_bitmask'] ?? FandomMembershipPerkBit.defaultAll,
       priceFiatVnd: json['price_fiat_vnd'] ?? 0,
       durationDays: json['duration_days'] ?? 30,
       iconUrl: json['icon_url'],
@@ -777,6 +824,234 @@ class FandomLedgerModel {
     );
   }
 }
+
+class LeaderboardSpendingEntryModel {
+  final int rank;
+  final String userId;
+  final String username;
+  final String? displayName;
+  final String? avatarUrl;
+  final int totalSpentVnd;
+  final int paidOrdersCount;
+  final String? highestTierName;
+  final int? highestTierLevel;
+  final String? highestTierColorHex;
+
+  LeaderboardSpendingEntryModel({
+    required this.rank,
+    required this.userId,
+    required this.username,
+    this.displayName,
+    this.avatarUrl,
+    required this.totalSpentVnd,
+    this.paidOrdersCount = 1,
+    this.highestTierName,
+    this.highestTierLevel,
+    this.highestTierColorHex,
+  });
+
+  factory LeaderboardSpendingEntryModel.fromJson(Map<String, dynamic> json) {
+    return LeaderboardSpendingEntryModel(
+      rank: json['rank'] ?? 1,
+      userId: json['user_id']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      displayName: json['display_name']?.toString(),
+      avatarUrl: json['avatar_url']?.toString(),
+      totalSpentVnd: json['total_spent_vnd'] ?? 0,
+      paidOrdersCount: json['paid_orders_count'] ?? 1,
+      highestTierName: json['highest_tier_name']?.toString(),
+      highestTierLevel: json['highest_tier_level'],
+      highestTierColorHex: json['highest_tier_color_hex']?.toString(),
+    );
+  }
+}
+
+class LeaderboardStreakEntryModel {
+  final int rank;
+  final String userId;
+  final String username;
+  final String? displayName;
+  final String? avatarUrl;
+  final int streakCount;
+  final int streakDays;
+  final String tierName;
+  final int tierLevel;
+  final String tierColorHex;
+  final DateTime? streakStartedAt;
+  final DateTime? expiresAt;
+  final bool isActive;
+
+  LeaderboardStreakEntryModel({
+    required this.rank,
+    required this.userId,
+    required this.username,
+    this.displayName,
+    this.avatarUrl,
+    required this.streakCount,
+    required this.streakDays,
+    required this.tierName,
+    this.tierLevel = 1,
+    this.tierColorHex = '#7C4DFF',
+    this.streakStartedAt,
+    this.expiresAt,
+    this.isActive = true,
+  });
+
+  factory LeaderboardStreakEntryModel.fromJson(Map<String, dynamic> json) {
+    return LeaderboardStreakEntryModel(
+      rank: json['rank'] ?? 1,
+      userId: json['user_id']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      displayName: json['display_name']?.toString(),
+      avatarUrl: json['avatar_url']?.toString(),
+      streakCount: json['streak_count'] ?? 1,
+      streakDays: json['streak_days'] ?? 30,
+      tierName: json['tier_name']?.toString() ?? 'Hội viên',
+      tierLevel: json['tier_level'] ?? 1,
+      tierColorHex: json['tier_color_hex']?.toString() ?? '#7C4DFF',
+      streakStartedAt: json['streak_started_at'] != null
+          ? DateTime.tryParse(json['streak_started_at'].toString())
+          : null,
+      expiresAt: json['expires_at'] != null
+          ? DateTime.tryParse(json['expires_at'].toString())
+          : null,
+      isActive: json['is_active'] ?? true,
+    );
+  }
+}
+
+class FandomLeaderboardModel {
+  final String fandomId;
+  final List<LeaderboardSpendingEntryModel> spendingLeaderboard;
+  final List<LeaderboardStreakEntryModel> streakLeaderboard;
+  final LeaderboardSpendingEntryModel? mySpendingEntry;
+  final LeaderboardStreakEntryModel? myStreakEntry;
+
+  FandomLeaderboardModel({
+    required this.fandomId,
+    this.spendingLeaderboard = const [],
+    this.streakLeaderboard = const [],
+    this.mySpendingEntry,
+    this.myStreakEntry,
+  });
+
+  factory FandomLeaderboardModel.fromJson(Map<String, dynamic> json) {
+    final rawSpending = json['spending_leaderboard'];
+    final rawStreaks = json['streak_leaderboard'];
+    return FandomLeaderboardModel(
+      fandomId: json['fandom_id']?.toString() ?? '',
+      spendingLeaderboard: rawSpending is List
+          ? rawSpending
+              .whereType<Map<String, dynamic>>()
+              .map(LeaderboardSpendingEntryModel.fromJson)
+              .toList()
+          : const [],
+      streakLeaderboard: rawStreaks is List
+          ? rawStreaks
+              .whereType<Map<String, dynamic>>()
+              .map(LeaderboardStreakEntryModel.fromJson)
+              .toList()
+          : const [],
+      mySpendingEntry: json['my_spending_entry'] is Map<String, dynamic>
+          ? LeaderboardSpendingEntryModel.fromJson(json['my_spending_entry'])
+          : null,
+      myStreakEntry: json['my_streak_entry'] is Map<String, dynamic>
+          ? LeaderboardStreakEntryModel.fromJson(json['my_streak_entry'])
+          : null,
+    );
+  }
+}
+
+class FandomEmojiModel {
+  final String id;
+  final String fandomId;
+  final String code;
+  final String shortcode;
+  final String name;
+  final String assetType; // 'EMOJI' or 'STICKER'
+  final String imageUrl;
+  final int minTierLevel;
+  final String minTierName;
+  final bool isUnlocked;
+  final DateTime? createdAt;
+
+  FandomEmojiModel({
+    required this.id,
+    required this.fandomId,
+    required this.code,
+    required this.shortcode,
+    required this.name,
+    this.assetType = 'EMOJI',
+    required this.imageUrl,
+    this.minTierLevel = 1,
+    this.minTierName = 'Hội viên Cấp 1',
+    this.isUnlocked = false,
+    this.createdAt,
+  });
+
+  bool get isSticker => assetType.toUpperCase() == 'STICKER';
+
+  factory FandomEmojiModel.fromJson(Map<String, dynamic> json) {
+    final codeStr = json['code']?.toString() ?? '';
+    final lvl = json['min_tier_level'] ?? 1;
+    return FandomEmojiModel(
+      id: json['id']?.toString() ?? '',
+      fandomId: json['fandom_id']?.toString() ?? '',
+      code: codeStr,
+      shortcode: json['shortcode']?.toString() ?? ':$codeStr:',
+      name: json['name']?.toString() ?? codeStr,
+      assetType: (json['asset_type']?.toString() ?? 'EMOJI').toUpperCase(),
+      imageUrl: json['image_url']?.toString() ?? '',
+      minTierLevel: lvl,
+      minTierName: json['min_tier_name']?.toString() ?? 'Hội viên Cấp $lvl',
+      isUnlocked: json['is_unlocked'] ?? false,
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
+          : null,
+    );
+  }
+}
+
+class FandomEmojiListModel {
+  final String fandomId;
+  final int userHighestTierLevel;
+  final int userPerksBitmask;
+  final List<FandomEmojiModel> items;
+
+  FandomEmojiListModel({
+    required this.fandomId,
+    this.userHighestTierLevel = 0,
+    this.userPerksBitmask = 0,
+    this.items = const [],
+  });
+
+  List<FandomEmojiModel> get emojis =>
+      items.where((e) => !e.isSticker).toList();
+
+  List<FandomEmojiModel> get stickers =>
+      items.where((e) => e.isSticker).toList();
+
+  Map<String, FandomEmojiModel> get byCode => {
+        for (final e in items) e.code.toLowerCase(): e,
+      };
+
+  factory FandomEmojiListModel.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    return FandomEmojiListModel(
+      fandomId: json['fandom_id']?.toString() ?? '',
+      userHighestTierLevel: json['user_highest_tier_level'] ?? 0,
+      userPerksBitmask: json['user_perks_bitmask'] ?? 0,
+      items: rawItems is List
+          ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(FandomEmojiModel.fromJson)
+              .toList()
+          : const [],
+    );
+  }
+}
+
+
 
 
 

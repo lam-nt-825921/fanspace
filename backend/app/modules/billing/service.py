@@ -18,11 +18,13 @@ from app.core.config import get_settings
 from app.modules.billing.models import FandomBankAccount, PaymentOrder, PaymentTransaction
 from app.modules.billing.reconciliation import (
     MAX_MEMBERSHIP_TIERS_PER_FANDOM,
+    build_fandom_leaderboard_response,
     build_fandom_ledger_response,
     build_sepay_qr_url,
     build_simulated_sepay_payload,
     build_transaction_entity,
     calculate_membership_expiry,
+    calculate_membership_streak,
     compute_sepay_hmac_signature,
     compute_tier_permissions_bitmask,
     evaluate_3way_reconciliation,
@@ -35,6 +37,7 @@ from app.modules.billing.reconciliation import (
 from app.modules.billing.schemas import (
     FandomBankAccountOut,
     FandomBankAccountUpsert,
+    FandomLeaderboardOut,
     FandomLedgerResponse,
     FandomMembershipsListOut,
     ManualTransactionResolveRequest,
@@ -132,7 +135,7 @@ class BillingService:
         duration_days: int,
         now: datetime,
     ) -> datetime:
-        """Atomically grants or extends a user's `MemberRole.expires_at` inside the caller's transaction."""
+        """Atomically grants or extends a user's `MemberRole.expires_at` and renewal streak inside the caller's transaction."""
         mem_res = await db.execute(
             select(FandomMember)
             .where(FandomMember.fandom_id == fandom_id, FandomMember.user_id == user_id)
@@ -155,8 +158,13 @@ class BillingService:
             .with_for_update()
         )
         member_role = mr_res.scalar_one_or_none()
-        new_expiry = calculate_membership_expiry(
+        streak_update = calculate_membership_streak(
             current_expires_at=member_role.expires_at if member_role else None,
+            current_streak_count=member_role.streak_count if member_role else 0,
+            current_streak_days=member_role.streak_days if member_role else 0,
+            current_streak_started_at=(
+                member_role.streak_started_at if member_role else None
+            ),
             duration_days=duration_days,
             now=now,
         )
@@ -166,12 +174,18 @@ class BillingService:
                     fandom_id=fandom_id,
                     user_id=user_id,
                     role_id=role_id,
-                    expires_at=new_expiry,
+                    expires_at=streak_update.new_expires_at,
+                    streak_count=streak_update.streak_count,
+                    streak_days=streak_update.streak_days,
+                    streak_started_at=streak_update.streak_started_at,
                 )
             )
         else:
-            member_role.expires_at = new_expiry
-        return new_expiry
+            member_role.expires_at = streak_update.new_expires_at
+            member_role.streak_count = streak_update.streak_count
+            member_role.streak_days = streak_update.streak_days
+            member_role.streak_started_at = streak_update.streak_started_at
+        return streak_update.new_expires_at
 
     # ------------------------------------------------------------------
     # 1. Fandom Bank Account Configuration
@@ -321,6 +335,7 @@ class BillingService:
             permissions_bitmask=compute_tier_permissions_bitmask(
                 data.permissions_bitmask
             ),
+            membership_perks_bitmask=int(data.membership_perks_bitmask),
             is_preset_mod=False,
             is_membership_tier=True,
             tier_level=data.tier_level or (current_count + 1),
@@ -832,3 +847,117 @@ class BillingService:
         )
 
         return serialize_transaction_out(tx, order.order_code)
+
+    # ------------------------------------------------------------------
+    # 6. Dual-Tab Membership Leaderboard (Spending & Streak)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def get_fandom_leaderboard(
+        db: AsyncSession,
+        identifier: str,
+        current_user: User | None = None,
+        limit: int = 50,
+    ) -> FandomLeaderboardOut:
+        """Computes the dual-tab Fandom Leaderboard (Top Spending & Top Renewal Streak)."""
+        fandom = await FandomService._resolve_fandom(db, identifier)
+        now = datetime.now(timezone.utc)
+
+        # 1. Load all Membership Tier roles for this fandom
+        roles_res = await db.execute(
+            select(Role).where(
+                Role.fandom_id == fandom.id,
+                Role.is_membership_tier.is_(True),
+            )
+        )
+        tier_roles_by_id: dict[uuid.UUID, Role] = {
+            r.id: r for r in roles_res.scalars().all()
+        }
+
+        # 2. Load all PAID / OVERPAID orders joined with User for Spending Leaderboard
+        orders_res = await db.execute(
+            select(PaymentOrder, User)
+            .join(User, User.id == PaymentOrder.user_id)
+            .where(
+                PaymentOrder.fandom_id == fandom.id,
+                PaymentOrder.status.in_(("PAID", "OVERPAID")),
+            )
+        )
+        spending_by_user: dict[uuid.UUID, dict[str, object]] = {}
+        for order, user in orders_res.all():
+            effective_paid = int(order.paid_amount_vnd or order.amount_vnd or 0)
+            role_obj = tier_roles_by_id.get(order.role_id) if order.role_id else None
+            tier_level = int(role_obj.tier_level or 1) if role_obj else 1
+            tier_name = role_obj.name if role_obj else order.role_name_snapshot
+            tier_color = (role_obj.color_hex if role_obj else None) or "#7C4DFF"
+
+            existing = spending_by_user.get(user.id)
+            if existing is None:
+                spending_by_user[user.id] = {
+                    "user_id": user.id,
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "avatar_url": user.avatar_url,
+                    "total_spent_vnd": effective_paid,
+                    "paid_orders_count": 1,
+                    "highest_tier_name": tier_name,
+                    "highest_tier_level": tier_level,
+                    "highest_tier_color_hex": tier_color,
+                }
+            else:
+                existing["total_spent_vnd"] = (
+                    int(existing["total_spent_vnd"]) + effective_paid
+                )
+                existing["paid_orders_count"] = int(existing["paid_orders_count"]) + 1
+                if tier_level >= int(existing.get("highest_tier_level") or 0):
+                    existing["highest_tier_name"] = tier_name
+                    existing["highest_tier_level"] = tier_level
+                    existing["highest_tier_color_hex"] = tier_color
+
+        # 3. Load all MemberRole records for Membership Tiers joined with User & Role for Streak Leaderboard
+        mr_res = await db.execute(
+            select(MemberRole, Role, User)
+            .join(Role, Role.id == MemberRole.role_id)
+            .join(User, User.id == MemberRole.user_id)
+            .where(
+                MemberRole.fandom_id == fandom.id,
+                Role.is_membership_tier.is_(True),
+            )
+        )
+        streak_by_user: dict[uuid.UUID, dict[str, object]] = {}
+        for mr, role, user in mr_res.all():
+            is_active = mr.expires_at is None or mr.expires_at > now
+            candidate = {
+                "user_id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "avatar_url": user.avatar_url,
+                "streak_count": int(mr.streak_count or 1),
+                "streak_days": int(mr.streak_days or role.duration_days or 30),
+                "tier_name": role.name,
+                "tier_level": int(role.tier_level or 1),
+                "tier_color_hex": role.color_hex or "#7C4DFF",
+                "streak_started_at": mr.streak_started_at or mr.assigned_at,
+                "expires_at": mr.expires_at,
+                "is_active": is_active,
+            }
+            existing_streak = streak_by_user.get(user.id)
+            if existing_streak is None or (
+                candidate["streak_count"],
+                candidate["streak_days"],
+                candidate["tier_level"],
+            ) > (
+                existing_streak["streak_count"],
+                existing_streak["streak_days"],
+                existing_streak["tier_level"],
+            ):
+                streak_by_user[user.id] = candidate
+
+        return build_fandom_leaderboard_response(
+            fandom_id=fandom.id,
+            raw_spending=list(spending_by_user.values()),
+            raw_streaks=list(streak_by_user.values()),
+            current_user_id=current_user.id if current_user else None,
+            limit=limit,
+        )
+

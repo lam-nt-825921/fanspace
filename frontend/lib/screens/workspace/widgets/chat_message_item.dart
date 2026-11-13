@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../models/channel_model.dart';
+import '../../../models/fandom_model.dart';
 import '../../../models/message_model.dart';
 
 class ChatMessageItem extends StatelessWidget {
@@ -18,8 +19,13 @@ class ChatMessageItem extends StatelessWidget {
     '👏',
   ];
 
+  static final RegExp _shortcodeRegex = RegExp(
+    r':([a-zA-Z0-9][a-zA-Z0-9_-]{1,62}[a-zA-Z0-9]):',
+  );
+
   final ChannelModel channel;
   final MessageModel message;
+  final Map<String, FandomEmojiModel> customEmojisByCode;
   final VoidCallback onReply;
   final ValueChanged<String> onToggleReaction;
   final VoidCallback onEdit;
@@ -39,6 +45,7 @@ class ChatMessageItem extends StatelessWidget {
     super.key,
     required this.channel,
     required this.message,
+    this.customEmojisByCode = const {},
     required this.onReply,
     required this.onToggleReaction,
     required this.onEdit,
@@ -213,14 +220,7 @@ class ChatMessageItem extends StatelessWidget {
                                   fontStyle: FontStyle.italic,
                                 ),
                               )
-                            : SelectableText(
-                                message.content,
-                                style: TextStyle(
-                                  color: palette.textPrimary,
-                                  fontSize: 14,
-                                  height: 1.45,
-                                ),
-                              ),
+                            : _buildMessageRichContent(palette),
                       ),
                     ),
                     if (!message.isRecalled) ...[
@@ -240,25 +240,51 @@ class ChatMessageItem extends StatelessWidget {
                     runSpacing: 10,
                     children: [
                       for (final att in message.attachments)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.network(
-                            att.url,
-                            height: 160,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
-                              padding: const EdgeInsets.all(12),
-                              color: palette.surfaceLight,
-                              child: Text(
-                                att.filename ?? att.url,
-                                style: TextStyle(
-                                  color: palette.textPrimary,
-                                  fontSize: 12,
+                        if (att.type.toUpperCase() == 'STICKER')
+                          Tooltip(
+                            message: att.filename ?? 'Sticker Độc Quyền Fandom',
+                            child: Image.network(
+                              key: Key('message_sticker_${message.id}'),
+                              att.url,
+                              width: 128,
+                              height: 128,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, _, _) => Container(
+                                width: 96,
+                                height: 96,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: palette.surfaceLight,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.sticky_note_2_rounded,
+                                  color: Colors.amber,
+                                  size: 40,
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Image.network(
+                              att.url,
+                              height: 160,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => Container(
+                                padding: const EdgeInsets.all(12),
+                                color: palette.surfaceLight,
+                                child: Text(
+                                  att.filename ?? att.url,
+                                  style: TextStyle(
+                                    color: palette.textPrimary,
+                                    fontSize: 12,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
                     ],
                   ),
                 ],
@@ -287,13 +313,10 @@ class ChatMessageItem extends StatelessWidget {
                                       AppTheme.primary.withValues(alpha: 0.4),
                                 ),
                               ),
-                              child: Text(
-                                '${entry.key} ${(entry.value as List).length}',
-                                style: TextStyle(
-                                  color: palette.textPrimary,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              child: _buildReactionPillContent(
+                                palette,
+                                entry.key,
+                                (entry.value as List).length,
                               ),
                             ),
                           ),
@@ -313,6 +336,121 @@ class ChatMessageItem extends StatelessWidget {
     );
   }
 
+  Widget _buildMessageRichContent(AppPalette palette) {
+    final text = message.content;
+    if (customEmojisByCode.isEmpty || !_shortcodeRegex.hasMatch(text)) {
+      return SelectableText(
+        text,
+        style: TextStyle(
+          color: palette.textPrimary,
+          fontSize: 14,
+          height: 1.45,
+        ),
+      );
+    }
+
+    final spans = <InlineSpan>[];
+    int lastEnd = 0;
+    for (final match in _shortcodeRegex.allMatches(text)) {
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
+      }
+      final rawCode = match.group(1)!.toLowerCase();
+      final emojiObj = customEmojisByCode[rawCode];
+      if (emojiObj != null) {
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Tooltip(
+                message: '${emojiObj.shortcode} (${emojiObj.name})',
+                child: Image.network(
+                  key: Key('inline_custom_emoji_${message.id}_${emojiObj.code}'),
+                  emojiObj.imageUrl,
+                  width: emojiObj.isSticker ? 48 : 22,
+                  height: emojiObj.isSticker ? 48 : 22,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Icon(
+                    Icons.emoji_emotions_rounded,
+                    size: 18,
+                    color: Colors.amber,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      } else {
+        spans.add(TextSpan(text: match.group(0)));
+      }
+      lastEnd = match.end;
+    }
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(text: text.substring(lastEnd)));
+    }
+
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(
+          color: palette.textPrimary,
+          fontSize: 14,
+          height: 1.45,
+        ),
+        children: spans,
+      ),
+    );
+  }
+
+  Widget _buildReactionPillContent(
+    AppPalette palette,
+    String reactionKey,
+    int count,
+  ) {
+    if (reactionKey.startsWith(':') &&
+        reactionKey.endsWith(':') &&
+        reactionKey.length >= 4) {
+      final code =
+          reactionKey.substring(1, reactionKey.length - 1).toLowerCase();
+      final customEmoji = customEmojisByCode[code];
+      if (customEmoji != null) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.network(
+              customEmoji.imageUrl,
+              width: 16,
+              height: 16,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => const Icon(
+                Icons.emoji_emotions_rounded,
+                size: 14,
+                color: Colors.amber,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '$count',
+              style: TextStyle(
+                color: palette.textPrimary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        );
+      }
+    }
+    return Text(
+      '$reactionKey $count',
+      style: TextStyle(
+        color: palette.textPrimary,
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
   /// Compact action bar placed immediately next to the message text bubble:
   /// 1. Grouped emoji reaction picker button
   /// 2. Quick reply button (opens/focuses thread reply)
@@ -322,6 +460,10 @@ class ChatMessageItem extends StatelessWidget {
     required AppPalette palette,
     required bool canModerate,
   }) {
+    final unlockedCustomEmojis = customEmojisByCode.values
+        .where((e) => !e.isSticker && e.isUnlocked)
+        .toList();
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       decoration: BoxDecoration(
@@ -355,6 +497,7 @@ class ChatMessageItem extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: Wrap(
                   spacing: 4,
+                  runSpacing: 4,
                   children: [
                     for (final emoji in _availableEmojis)
                       InkWell(
@@ -368,6 +511,34 @@ class ChatMessageItem extends StatelessWidget {
                           child: Text(
                             emoji,
                             style: const TextStyle(fontSize: 18),
+                          ),
+                        ),
+                      ),
+                    for (final custom in unlockedCustomEmojis)
+                      InkWell(
+                        key: Key(
+                          'reaction_custom_emoji_${message.id}_${custom.code}',
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          onToggleReaction(custom.shortcode);
+                        },
+                        child: Tooltip(
+                          message: '${custom.shortcode} (${custom.name})',
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Image.network(
+                              custom.imageUrl,
+                              width: 20,
+                              height: 20,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, _, _) => const Icon(
+                                Icons.emoji_emotions_rounded,
+                                size: 18,
+                                color: Colors.amber,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -575,6 +746,7 @@ class ChatMessageItem extends StatelessWidget {
                   ChatMessageItem(
                     channel: channel,
                     message: reply,
+                    customEmojisByCode: customEmojisByCode,
                     isThreadChild: true,
                     onReply: () =>
                         (onReplyToThreadMessage ?? (_) => onReply())(reply),

@@ -291,7 +291,7 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
         """
         from app.modules.chat.models import Channel
         from app.modules.fandom.models import Fandom, FandomMember
-        from app.modules.rbac.models import MemberRole, PermissionBit, Role
+        from app.modules.rbac.models import MemberRole, MembershipPerkBit, PermissionBit, Role
         from sqlalchemy import or_
 
         fandom_res = await self._db.execute(
@@ -401,10 +401,30 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
                     if not has_role:
                         return set()
 
+                membership_roles = [r for r in roles if r.is_membership_tier]
+                min_req_tier = int(getattr(channel, "min_membership_tier_level", 0) or 0)
+
                 if channel.is_membership_only and Permission.MANAGE_CHANNELS not in permissions:
-                    has_membership = any(r.is_membership_tier for r in roles)
-                    if not has_membership:
+                    if not membership_roles:
                         return set()
+                    if min_req_tier > 0:
+                        highest_tier = max(int(r.tier_level or 1) for r in membership_roles)
+                        if highest_tier < min_req_tier:
+                            return set()
+
+                if getattr(channel, "membership_bypass_slowmode", False) and membership_roles:
+                    for mr in membership_roles:
+                        mr_level = int(mr.tier_level or 1)
+                        mr_perks = int(
+                            mr.membership_perks_bitmask
+                            if mr.membership_perks_bitmask is not None
+                            else MembershipPerkBit.DEFAULT_TIER_PERKS
+                        )
+                        if mr_level >= min_req_tier and (
+                            mr_perks & MembershipPerkBit.PRIORITY_CHANNEL_ACCESS
+                        ):
+                            permissions.add(Permission.BYPASS_SLOWMODE)
+                            break
 
                 if channel.is_announcement:
                     if Permission.SEND_ANNOUNCEMENT not in permissions and Permission.MANAGE_CHANNELS not in permissions:

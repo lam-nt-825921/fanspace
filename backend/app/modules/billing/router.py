@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.modules.billing.schemas import (
     FandomBankAccountOut,
     FandomBankAccountUpsert,
+    FandomLeaderboardOut,
     FandomLedgerResponse,
     FandomMembershipsListOut,
     ManualTransactionResolveRequest,
@@ -23,6 +24,13 @@ from app.modules.billing.schemas import (
     SepayWebhookResponse,
 )
 from app.modules.billing.service import BillingService
+from app.modules.fandom.emoji_service import (
+    FandomEmojiCreate,
+    FandomEmojiListOut,
+    FandomEmojiOut,
+    FandomEmojiService,
+    FandomEmojiUpdate,
+)
 from app.modules.identity.models import User
 from app.modules.identity.service import get_current_user, get_optional_current_user
 
@@ -310,3 +318,115 @@ async def resolve_transaction_manually(
         current_user=current_user,
         data=data,
     )
+
+
+# ---------------------------------------------------------------------------
+# 6. Dual-Tab Membership Leaderboard (Spending & Streak)
+# ---------------------------------------------------------------------------
+
+
+@billing_router.get(
+    "/fandoms/{identifier}/leaderboard",
+    response_model=FandomLeaderboardOut,
+    summary="Bảng xếp hạng Hội viên Fandom (2 Tabs: Theo tổng tiền ủng hộ & Theo chuỗi gia hạn)",
+)
+async def get_fandom_leaderboard(
+    identifier: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns the dual-tab Fandom Membership Leaderboard (Top Spending & Top Streak)."""
+    return await BillingService.get_fandom_leaderboard(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        limit=limit,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Fandom Exclusive Emojis & Stickers
+# ---------------------------------------------------------------------------
+
+
+@billing_router.get(
+    "/fandoms/{identifier}/emojis",
+    response_model=FandomEmojiListOut,
+    summary="Lấy danh sách bộ Emoji & Sticker độc quyền của Fandom kèm trạng thái mở khóa theo gói Hội viên",
+)
+async def list_fandom_emojis(
+    identifier: str,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lists all custom Emojis and Stickers in a Fandom and whether the caller has unlocked each item."""
+    return await FandomEmojiService.list_fandom_emojis(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+    )
+
+
+@billing_router.post(
+    "/fandoms/{identifier}/emojis",
+    response_model=FandomEmojiOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Tạo mới Emoji hoặc Sticker độc quyền cho Fandom và chọn cấp gói Hội viên mở khóa (Chủ Fandom)",
+)
+async def create_fandom_emoji(
+    identifier: str,
+    data: FandomEmojiCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Creates a new Fandom-exclusive Emoji or Sticker."""
+    return await FandomEmojiService.create_fandom_emoji(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@billing_router.put(
+    "/fandoms/{identifier}/emojis/{emoji_id}",
+    response_model=FandomEmojiOut,
+    summary="Cập nhật Emoji/Sticker độc quyền hoặc đổi cấp gói Hội viên mở khóa (Chủ Fandom)",
+)
+async def update_fandom_emoji(
+    identifier: str,
+    emoji_id: uuid.UUID,
+    data: FandomEmojiUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Updates an existing Fandom-exclusive Emoji or Sticker."""
+    return await FandomEmojiService.update_fandom_emoji(
+        db=db,
+        identifier=identifier,
+        emoji_id=emoji_id,
+        current_user=current_user,
+        data=data,
+    )
+
+
+@billing_router.delete(
+    "/fandoms/{identifier}/emojis/{emoji_id}",
+    summary="Xóa Emoji hoặc Sticker độc quyền của Fandom (Chủ Fandom)",
+)
+async def delete_fandom_emoji(
+    identifier: str,
+    emoji_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Deletes an existing Fandom-exclusive Emoji or Sticker."""
+    return await FandomEmojiService.delete_fandom_emoji(
+        db=db,
+        identifier=identifier,
+        emoji_id=emoji_id,
+        current_user=current_user,
+    )
+
+

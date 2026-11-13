@@ -24,6 +24,7 @@ from app.modules.chat.schemas import (
     ChannelUpdate,
     FandomChannelsListResponse,
 )
+from app.modules.fandom.emoji_service import FandomEmojiService
 from app.modules.fandom.models import Fandom
 from app.modules.identity.models import User
 
@@ -161,6 +162,34 @@ class ChannelService:
             await db.refresh(ch)
         return defaults
 
+    @staticmethod
+    def _serialize_channel_out(
+        channel: Channel,
+        effective_perms: frozenset[Permission],
+    ) -> ChannelOut:
+        """Maps a `Channel` ORM entity and effective permissions to `ChannelOut`."""
+        return ChannelOut(
+            id=channel.id,
+            fandom_id=channel.fandom_id,
+            name=channel.name,
+            type=channel.type,
+            topic=channel.topic,
+            position=channel.position,
+            is_announcement=channel.is_announcement,
+            is_membership_only=channel.is_membership_only,
+            min_membership_tier_level=int(
+                getattr(channel, "min_membership_tier_level", 0) or 0
+            ),
+            membership_bypass_slowmode=bool(
+                getattr(channel, "membership_bypass_slowmode", False)
+            ),
+            required_role_id=channel.required_role_id,
+            slow_mode_seconds=channel.slow_mode_seconds,
+            voice_room_type=channel.voice_room_type,
+            created_at=channel.created_at,
+            my_permissions=sorted(p.value for p in effective_perms),
+        )
+
     @classmethod
     async def list_channels(
         cls,
@@ -207,21 +236,7 @@ class ChannelService:
                 continue
 
             accessible_channels.append(
-                ChannelOut(
-                    id=channel.id,
-                    fandom_id=channel.fandom_id,
-                    name=channel.name,
-                    type=channel.type,
-                    topic=channel.topic,
-                    position=channel.position,
-                    is_announcement=channel.is_announcement,
-                    is_membership_only=channel.is_membership_only,
-                    required_role_id=channel.required_role_id,
-                    slow_mode_seconds=channel.slow_mode_seconds,
-                    voice_room_type=channel.voice_room_type,
-                    created_at=channel.created_at,
-                    my_permissions=sorted(p.value for p in effective_perms),
-                )
+                cls._serialize_channel_out(channel, effective_perms)
             )
 
         return FandomChannelsListResponse(
@@ -282,6 +297,16 @@ class ChannelService:
             position=next_position,
             is_announcement=data.is_announcement if data.type == "TEXT" else False,
             is_membership_only=data.is_membership_only,
+            min_membership_tier_level=(
+                int(data.min_membership_tier_level or 0)
+                if data.is_membership_only
+                else 0
+            ),
+            membership_bypass_slowmode=(
+                bool(data.membership_bypass_slowmode)
+                if data.type == "TEXT"
+                else False
+            ),
             required_role_id=data.required_role_id,
             slow_mode_seconds=data.slow_mode_seconds if data.type == "TEXT" else 0,
             voice_room_type=voice_type,
@@ -301,21 +326,7 @@ class ChannelService:
             else frozenset(raw_perms)
         )
 
-        return ChannelOut(
-            id=channel.id,
-            fandom_id=channel.fandom_id,
-            name=channel.name,
-            type=channel.type,
-            topic=channel.topic,
-            position=channel.position,
-            is_announcement=channel.is_announcement,
-            is_membership_only=channel.is_membership_only,
-            required_role_id=channel.required_role_id,
-            slow_mode_seconds=channel.slow_mode_seconds,
-            voice_room_type=channel.voice_room_type,
-            created_at=channel.created_at,
-            my_permissions=sorted(p.value for p in effective_perms),
-        )
+        return cls._serialize_channel_out(channel, effective_perms)
 
     @classmethod
     async def update_channel(
@@ -382,8 +393,20 @@ class ChannelService:
 
         if data.is_membership_only is not None:
             channel.is_membership_only = data.is_membership_only
+            if not data.is_membership_only:
+                channel.min_membership_tier_level = 0
 
-        if data.required_role_id is not None:
+        if data.min_membership_tier_level is not None:
+            channel.min_membership_tier_level = (
+                int(data.min_membership_tier_level)
+                if channel.is_membership_only
+                else 0
+            )
+
+        if data.membership_bypass_slowmode is not None and channel.type == "TEXT":
+            channel.membership_bypass_slowmode = data.membership_bypass_slowmode
+
+        if "required_role_id" in data.model_fields_set:
             channel.required_role_id = data.required_role_id
 
         if data.slow_mode_seconds is not None and channel.type == "TEXT":
@@ -406,21 +429,7 @@ class ChannelService:
             else frozenset(raw_perms)
         )
 
-        return ChannelOut(
-            id=channel.id,
-            fandom_id=channel.fandom_id,
-            name=channel.name,
-            type=channel.type,
-            topic=channel.topic,
-            position=channel.position,
-            is_announcement=channel.is_announcement,
-            is_membership_only=channel.is_membership_only,
-            required_role_id=channel.required_role_id,
-            slow_mode_seconds=channel.slow_mode_seconds,
-            voice_room_type=channel.voice_room_type,
-            created_at=channel.created_at,
-            my_permissions=sorted(p.value for p in effective_perms),
-        )
+        return cls._serialize_channel_out(channel, effective_perms)
 
     @classmethod
     async def delete_channel(
@@ -852,7 +861,10 @@ class MessageService:
                 detail="Nội dung tin nhắn hoặc tệp đính kèm không được để trống.",
             )
 
-        if data.attachments and not eval_ctx.has(Permission.ATTACH_FILES):
+        has_non_sticker_attachment = any(
+            (item.type or "").upper() != "STICKER" for item in data.attachments
+        )
+        if has_non_sticker_attachment and not eval_ctx.has(Permission.ATTACH_FILES):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Bạn không có quyền đính kèm tệp hoặc hình ảnh trong kênh này.",
@@ -863,6 +875,14 @@ class MessageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
             )
+
+        await FandomEmojiService.validate_message_emojis_and_stickers(
+            db=db,
+            fandom=fandom,
+            current_user=current_user,
+            content=cleaned_content,
+            attachments=data.attachments,
+        )
 
         reply_preview: MessageReplyPreviewOut | None = None
         if data.reply_to_id is not None:
@@ -950,6 +970,14 @@ class MessageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Bạn không có quyền chèn liên kết (link) trong kênh này.",
             )
+
+        await FandomEmojiService.validate_message_emojis_and_stickers(
+            db=db,
+            fandom=fandom,
+            current_user=current_user,
+            content=cleaned,
+            attachments=None,
+        )
 
         message.content = cleaned
         message.is_edited = True
@@ -1070,6 +1098,12 @@ class MessageService:
             else:
                 current_reactions.pop(emoji, None)
         else:
+            await FandomEmojiService.validate_reaction_emoji(
+                db=db,
+                fandom=fandom,
+                current_user=current_user,
+                emoji_str=emoji,
+            )
             users_for_emoji.append(user_id_str)
             current_reactions[emoji] = users_for_emoji
 

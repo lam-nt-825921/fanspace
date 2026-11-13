@@ -87,6 +87,7 @@ class FandomRolesTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final regularRoles = roles.where((r) => !r.isMembershipTier).toList();
 
     return Column(
       children: [
@@ -147,7 +148,7 @@ class FandomRolesTab extends StatelessWidget {
         Expanded(
           child: isLoading
               ? const Center(child: CircularProgressIndicator())
-              : roles.isEmpty
+              : regularRoles.isEmpty
                   ? Center(
                       child: Text(
                         'Chưa có vai trò nào được tạo.',
@@ -159,10 +160,10 @@ class FandomRolesTab extends StatelessWidget {
                         horizontal: 16,
                         vertical: 8,
                       ),
-                      itemCount: roles.length,
+                      itemCount: regularRoles.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 8),
                       itemBuilder: (ctx, index) {
-                        final role = roles[index];
+                        final role = regularRoles[index];
                         final roleColor = parseRoleColor(role.colorHex);
 
                         return Container(

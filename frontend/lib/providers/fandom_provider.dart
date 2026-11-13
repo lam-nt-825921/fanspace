@@ -717,6 +717,7 @@ class FandomProvider extends ChangeNotifier {
     String colorHex = '#FFD700',
     int priority = 50,
     int permissionsBitmask = 0,
+    int membershipPerksBitmask = FandomMembershipPerkBit.defaultAll,
     required int priceFiatVnd,
     int durationDays = 30,
     String? iconUrl,
@@ -730,6 +731,7 @@ class FandomProvider extends ChangeNotifier {
           'color_hex': colorHex,
           'priority': priority,
           'permissions_bitmask': permissionsBitmask,
+          'membership_perks_bitmask': membershipPerksBitmask,
           'price_fiat_vnd': priceFiatVnd,
           'duration_days': durationDays,
           if (iconUrl != null && iconUrl.trim().isNotEmpty)
@@ -757,6 +759,7 @@ class FandomProvider extends ChangeNotifier {
     String? colorHex,
     int? priority,
     int? permissionsBitmask,
+    int? membershipPerksBitmask,
     int? priceFiatVnd,
     int? durationDays,
     String? iconUrl,
@@ -769,6 +772,9 @@ class FandomProvider extends ChangeNotifier {
       if (priority != null) payload['priority'] = priority;
       if (permissionsBitmask != null) {
         payload['permissions_bitmask'] = permissionsBitmask;
+      }
+      if (membershipPerksBitmask != null) {
+        payload['membership_perks_bitmask'] = membershipPerksBitmask;
       }
       if (priceFiatVnd != null) payload['price_fiat_vnd'] = priceFiatVnd;
       if (durationDays != null) payload['duration_days'] = durationDays;
@@ -938,6 +944,155 @@ class FandomProvider extends ChangeNotifier {
       return {'success': false, 'error': 'Lỗi kết nối: $e'};
     }
   }
+
+  Future<FandomLeaderboardModel?> fetchFandomLeaderboard(
+    String identifier, {
+    int limit = 50,
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/leaderboard',
+        queryParameters: {'limit': limit},
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomLeaderboardModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<FandomEmojiListModel?> fetchFandomEmojis(String identifier) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/emojis',
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomEmojiListModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadFandomEmojiImage(
+    String fandomId, {
+    required List<int> bytes,
+    required String filename,
+  }) async {
+    try {
+      final formData = FormData.fromMap({
+        'target': 'FANDOM_EMOJI',
+        'entity_id': fandomId,
+        'file': MultipartFile.fromBytes(bytes, filename: filename),
+      });
+      final response = await _apiClient.dio.post(
+        '/api/v1/media/upload',
+        data: formData,
+      );
+      final url = response.data['url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        return {'success': true, 'url': url};
+      }
+      return {'success': false, 'error': 'Không nhận được URL ảnh sau khi tải lên.'};
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể tải ảnh Emoji/Sticker lên.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> createFandomEmoji(
+    String identifier, {
+    required String code,
+    required String name,
+    String assetType = 'EMOJI',
+    required String imageUrl,
+    int minTierLevel = 1,
+  }) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/api/v1/fandoms/$identifier/emojis',
+        data: {
+          'code': code.trim(),
+          'name': name.trim(),
+          'asset_type': assetType.toUpperCase(),
+          'image_url': imageUrl.trim(),
+          'min_tier_level': minTierLevel,
+        },
+      );
+      return {
+        'success': true,
+        'emoji': FandomEmojiModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể tạo Emoji/Sticker độc quyền.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateFandomEmoji(
+    String identifier,
+    String emojiId, {
+    String? code,
+    String? name,
+    String? assetType,
+    String? imageUrl,
+    int? minTierLevel,
+  }) async {
+    try {
+      final response = await _apiClient.dio.put(
+        '/api/v1/fandoms/$identifier/emojis/$emojiId',
+        data: {
+          if (code != null) 'code': code.trim(),
+          if (name != null) 'name': name.trim(),
+          if (assetType != null) 'asset_type': assetType.toUpperCase(),
+          if (imageUrl != null) 'image_url': imageUrl.trim(),
+          if (minTierLevel != null) 'min_tier_level': minTierLevel,
+        },
+      );
+      return {
+        'success': true,
+        'emoji': FandomEmojiModel.fromJson(response.data),
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể cập nhật Emoji/Sticker.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteFandomEmoji(
+    String identifier,
+    String emojiId,
+  ) async {
+    try {
+      final response = await _apiClient.dio.delete(
+        '/api/v1/fandoms/$identifier/emojis/$emojiId',
+      );
+      return {
+        'success': true,
+        'message': response.data?['message'] ?? 'Đã xóa Emoji/Sticker.',
+      };
+    } on DioException catch (e) {
+      final detail =
+          e.response?.data?['detail'] ?? 'Không thể xóa Emoji/Sticker.';
+      return {'success': false, 'error': detail.toString()};
+    } catch (e) {
+      return {'success': false, 'error': 'Lỗi kết nối: $e'};
+    }
+  }
 }
+
+
 
 
