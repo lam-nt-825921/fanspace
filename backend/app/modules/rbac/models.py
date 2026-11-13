@@ -150,6 +150,9 @@ class MemberRole(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    streak_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    streak_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    streak_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     role = relationship("Role", back_populates="member_assignments")

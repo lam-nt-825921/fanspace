@@ -136,5 +136,14 @@ async def init_db() -> None:
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_messages_channel_cursor ON messages (channel_id, created_at DESC, id DESC);")
         )
+        await conn.execute(
+            text("ALTER TABLE member_roles ADD COLUMN IF NOT EXISTS streak_count INTEGER DEFAULT 1 NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE member_roles ADD COLUMN IF NOT EXISTS streak_days INTEGER DEFAULT 0 NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE member_roles ADD COLUMN IF NOT EXISTS streak_started_at TIMESTAMP WITH TIME ZONE NULL;")
+        )
 
 

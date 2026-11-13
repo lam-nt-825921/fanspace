@@ -938,6 +938,25 @@ class FandomProvider extends ChangeNotifier {
       return {'success': false, 'error': 'Lỗi kết nối: $e'};
     }
   }
+
+  Future<FandomLeaderboardModel?> fetchFandomLeaderboard(
+    String identifier, {
+    int limit = 50,
+  }) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/api/v1/fandoms/$identifier/leaderboard',
+        queryParameters: {'limit': limit},
+      );
+      if (response.data is Map<String, dynamic>) {
+        return FandomLeaderboardModel.fromJson(response.data);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
+
 
 

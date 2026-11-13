@@ -778,5 +778,143 @@ class FandomLedgerModel {
   }
 }
 
+class LeaderboardSpendingEntryModel {
+  final int rank;
+  final String userId;
+  final String username;
+  final String? displayName;
+  final String? avatarUrl;
+  final int totalSpentVnd;
+  final int paidOrdersCount;
+  final String? highestTierName;
+  final int? highestTierLevel;
+  final String? highestTierColorHex;
+
+  LeaderboardSpendingEntryModel({
+    required this.rank,
+    required this.userId,
+    required this.username,
+    this.displayName,
+    this.avatarUrl,
+    required this.totalSpentVnd,
+    this.paidOrdersCount = 1,
+    this.highestTierName,
+    this.highestTierLevel,
+    this.highestTierColorHex,
+  });
+
+  factory LeaderboardSpendingEntryModel.fromJson(Map<String, dynamic> json) {
+    return LeaderboardSpendingEntryModel(
+      rank: json['rank'] ?? 1,
+      userId: json['user_id']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      displayName: json['display_name']?.toString(),
+      avatarUrl: json['avatar_url']?.toString(),
+      totalSpentVnd: json['total_spent_vnd'] ?? 0,
+      paidOrdersCount: json['paid_orders_count'] ?? 1,
+      highestTierName: json['highest_tier_name']?.toString(),
+      highestTierLevel: json['highest_tier_level'],
+      highestTierColorHex: json['highest_tier_color_hex']?.toString(),
+    );
+  }
+}
+
+class LeaderboardStreakEntryModel {
+  final int rank;
+  final String userId;
+  final String username;
+  final String? displayName;
+  final String? avatarUrl;
+  final int streakCount;
+  final int streakDays;
+  final String tierName;
+  final int tierLevel;
+  final String tierColorHex;
+  final DateTime? streakStartedAt;
+  final DateTime? expiresAt;
+  final bool isActive;
+
+  LeaderboardStreakEntryModel({
+    required this.rank,
+    required this.userId,
+    required this.username,
+    this.displayName,
+    this.avatarUrl,
+    required this.streakCount,
+    required this.streakDays,
+    required this.tierName,
+    this.tierLevel = 1,
+    this.tierColorHex = '#7C4DFF',
+    this.streakStartedAt,
+    this.expiresAt,
+    this.isActive = true,
+  });
+
+  factory LeaderboardStreakEntryModel.fromJson(Map<String, dynamic> json) {
+    return LeaderboardStreakEntryModel(
+      rank: json['rank'] ?? 1,
+      userId: json['user_id']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      displayName: json['display_name']?.toString(),
+      avatarUrl: json['avatar_url']?.toString(),
+      streakCount: json['streak_count'] ?? 1,
+      streakDays: json['streak_days'] ?? 30,
+      tierName: json['tier_name']?.toString() ?? 'Hội viên',
+      tierLevel: json['tier_level'] ?? 1,
+      tierColorHex: json['tier_color_hex']?.toString() ?? '#7C4DFF',
+      streakStartedAt: json['streak_started_at'] != null
+          ? DateTime.tryParse(json['streak_started_at'].toString())
+          : null,
+      expiresAt: json['expires_at'] != null
+          ? DateTime.tryParse(json['expires_at'].toString())
+          : null,
+      isActive: json['is_active'] ?? true,
+    );
+  }
+}
+
+class FandomLeaderboardModel {
+  final String fandomId;
+  final List<LeaderboardSpendingEntryModel> spendingLeaderboard;
+  final List<LeaderboardStreakEntryModel> streakLeaderboard;
+  final LeaderboardSpendingEntryModel? mySpendingEntry;
+  final LeaderboardStreakEntryModel? myStreakEntry;
+
+  FandomLeaderboardModel({
+    required this.fandomId,
+    this.spendingLeaderboard = const [],
+    this.streakLeaderboard = const [],
+    this.mySpendingEntry,
+    this.myStreakEntry,
+  });
+
+  factory FandomLeaderboardModel.fromJson(Map<String, dynamic> json) {
+    final rawSpending = json['spending_leaderboard'];
+    final rawStreaks = json['streak_leaderboard'];
+    return FandomLeaderboardModel(
+      fandomId: json['fandom_id']?.toString() ?? '',
+      spendingLeaderboard: rawSpending is List
+          ? rawSpending
+              .whereType<Map<String, dynamic>>()
+              .map(LeaderboardSpendingEntryModel.fromJson)
+              .toList()
+          : const [],
+      streakLeaderboard: rawStreaks is List
+          ? rawStreaks
+              .whereType<Map<String, dynamic>>()
+              .map(LeaderboardStreakEntryModel.fromJson)
+              .toList()
+          : const [],
+      mySpendingEntry: json['my_spending_entry'] is Map<String, dynamic>
+          ? LeaderboardSpendingEntryModel.fromJson(json['my_spending_entry'])
+          : null,
+      myStreakEntry: json['my_streak_entry'] is Map<String, dynamic>
+          ? LeaderboardStreakEntryModel.fromJson(json['my_streak_entry'])
+          : null,
+    );
+  }
+}
+
+
 
 

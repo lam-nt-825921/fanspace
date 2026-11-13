@@ -228,3 +228,46 @@ class FandomLedgerResponse(BaseModel):
     discrepant_transactions_count: int = 0
     orders: list[PaymentOrderOut] = Field(default_factory=list)
     transactions: list[PaymentTransactionOut] = Field(default_factory=list)
+
+
+class LeaderboardSpendingEntryOut(BaseModel):
+    """Single ranked entry in the Fandom Spending Leaderboard tab."""
+
+    rank: int
+    user_id: uuid.UUID
+    username: str
+    display_name: str
+    avatar_url: str | None = None
+    total_spent_vnd: int
+    paid_orders_count: int
+    highest_tier_name: str | None = None
+    highest_tier_level: int | None = None
+    highest_tier_color_hex: str | None = None
+
+
+class LeaderboardStreakEntryOut(BaseModel):
+    """Single ranked entry in the Fandom Membership Renewal Streak Leaderboard tab."""
+
+    rank: int
+    user_id: uuid.UUID
+    username: str
+    display_name: str
+    avatar_url: str | None = None
+    streak_count: int
+    streak_days: int
+    tier_name: str
+    tier_level: int
+    tier_color_hex: str
+    streak_started_at: datetime | None = None
+    expires_at: datetime | None = None
+    is_active: bool = True
+
+
+class FandomLeaderboardOut(BaseModel):
+    """Dual-tab Fandom Leaderboard response (Spending & Membership Streak)."""
+
+    fandom_id: uuid.UUID
+    spending_leaderboard: list[LeaderboardSpendingEntryOut] = Field(default_factory=list)
+    streak_leaderboard: list[LeaderboardStreakEntryOut] = Field(default_factory=list)
+    my_spending_entry: LeaderboardSpendingEntryOut | None = None
+    my_streak_entry: LeaderboardStreakEntryOut | None = None

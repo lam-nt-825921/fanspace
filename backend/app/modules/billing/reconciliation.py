@@ -22,7 +22,10 @@ from fastapi import HTTPException, status
 from app.core.config import get_settings
 from app.modules.billing.models import PaymentOrder, PaymentTransaction
 from app.modules.billing.schemas import (
+    FandomLeaderboardOut,
     FandomLedgerResponse,
+    LeaderboardSpendingEntryOut,
+    LeaderboardStreakEntryOut,
     MembershipTierOut,
     PaymentOrderOut,
     PaymentTransactionOut,
@@ -48,6 +51,16 @@ class ReconciliationDecision:
     should_provision_role: bool
     mark_paid_timestamp: bool
     audit_note: str
+
+
+@dataclass(frozen=True)
+class MembershipStreakUpdate:
+    """Immutable calculation result for membership expiration and renewal streak."""
+
+    new_expires_at: datetime
+    streak_count: int
+    streak_days: int
+    streak_started_at: datetime
 
 
 def compute_tier_permissions_bitmask(requested_bitmask: int) -> int:
@@ -178,6 +191,42 @@ def calculate_membership_expiry(
         else now
     )
     return base_time + timedelta(days=duration_days)
+
+
+def calculate_membership_streak(
+    current_expires_at: datetime | None,
+    current_streak_count: int | None,
+    current_streak_days: int | None,
+    current_streak_started_at: datetime | None,
+    duration_days: int,
+    now: datetime,
+    streak_grace_hours: int = 24,
+) -> MembershipStreakUpdate:
+    """Calculates updated membership expiration and consecutive renewal streak metrics."""
+    new_expires_at = calculate_membership_expiry(
+        current_expires_at=current_expires_at,
+        duration_days=duration_days,
+        now=now,
+    )
+    grace_cutoff = now - timedelta(hours=streak_grace_hours)
+    is_consecutive = (
+        current_expires_at is not None
+        and current_expires_at >= grace_cutoff
+        and (current_streak_count or 0) > 0
+    )
+    if is_consecutive:
+        return MembershipStreakUpdate(
+            new_expires_at=new_expires_at,
+            streak_count=int(current_streak_count or 0) + 1,
+            streak_days=int(current_streak_days or 0) + int(duration_days),
+            streak_started_at=current_streak_started_at or now,
+        )
+    return MembershipStreakUpdate(
+        new_expires_at=new_expires_at,
+        streak_count=1,
+        streak_days=int(duration_days),
+        streak_started_at=now,
+    )
 
 
 def evaluate_3way_reconciliation(
@@ -450,3 +499,81 @@ def build_fandom_ledger_response(
             for o in orders
         ],
     )
+
+
+def build_fandom_leaderboard_response(
+    fandom_id: uuid.UUID,
+    raw_spending: Iterable[Mapping[str, object]],
+    raw_streaks: Iterable[Mapping[str, object]],
+    current_user_id: uuid.UUID | None = None,
+    limit: int = 50,
+) -> FandomLeaderboardOut:
+    """Sorts and assigns 1-based rankings for Spending and Streak leaderboard tabs."""
+    sorted_spending = sorted(
+        raw_spending,
+        key=lambda item: (
+            -int(item.get("total_spent_vnd") or 0),
+            -int(item.get("paid_orders_count") or 0),
+            str(item.get("username") or ""),
+        ),
+    )
+    spending_entries: list[LeaderboardSpendingEntryOut] = []
+    my_spending_entry: LeaderboardSpendingEntryOut | None = None
+    for idx, row in enumerate(sorted_spending, start=1):
+        entry = LeaderboardSpendingEntryOut(
+            rank=idx,
+            user_id=row["user_id"],
+            username=str(row["username"]),
+            display_name=row.get("display_name"),
+            avatar_url=row.get("avatar_url"),
+            total_spent_vnd=int(row.get("total_spent_vnd") or 0),
+            paid_orders_count=int(row.get("paid_orders_count") or 0),
+            highest_tier_name=row.get("highest_tier_name"),
+            highest_tier_level=row.get("highest_tier_level"),
+            highest_tier_color_hex=row.get("highest_tier_color_hex"),
+        )
+        if current_user_id is not None and entry.user_id == current_user_id:
+            my_spending_entry = entry
+        if len(spending_entries) < limit:
+            spending_entries.append(entry)
+
+    sorted_streaks = sorted(
+        raw_streaks,
+        key=lambda item: (
+            -int(item.get("streak_count") or 0),
+            -int(item.get("streak_days") or 0),
+            -int(item.get("tier_level") or 0),
+            str(item.get("username") or ""),
+        ),
+    )
+    streak_entries: list[LeaderboardStreakEntryOut] = []
+    my_streak_entry: LeaderboardStreakEntryOut | None = None
+    for idx, row in enumerate(sorted_streaks, start=1):
+        entry = LeaderboardStreakEntryOut(
+            rank=idx,
+            user_id=row["user_id"],
+            username=str(row["username"]),
+            display_name=row.get("display_name"),
+            avatar_url=row.get("avatar_url"),
+            streak_count=int(row.get("streak_count") or 1),
+            streak_days=int(row.get("streak_days") or 0),
+            tier_name=str(row["tier_name"]),
+            tier_level=int(row.get("tier_level") or 1),
+            tier_color_hex=str(row.get("tier_color_hex") or "#7C4DFF"),
+            streak_started_at=row.get("streak_started_at"),
+            expires_at=row.get("expires_at"),
+            is_active=bool(row.get("is_active", True)),
+        )
+        if current_user_id is not None and entry.user_id == current_user_id:
+            my_streak_entry = entry
+        if len(streak_entries) < limit:
+            streak_entries.append(entry)
+
+    return FandomLeaderboardOut(
+        fandom_id=fandom_id,
+        spending_leaderboard=spending_entries,
+        streak_leaderboard=streak_entries,
+        my_spending_entry=my_spending_entry,
+        my_streak_entry=my_streak_entry,
+    )
+

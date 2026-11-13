@@ -19,6 +19,7 @@ class WorkspaceSidebar extends StatelessWidget {
   final bool isDrawer;
   final VoidCallback onSelectWelcome;
   final VoidCallback onSelectRules;
+  final VoidCallback? onSelectLeaderboard;
   final VoidCallback onOpenMembershipTiers;
   final VoidCallback onOpenFandomSettings;
   final VoidCallback onCreateChannel;
@@ -34,6 +35,7 @@ class WorkspaceSidebar extends StatelessWidget {
     required this.isDrawer,
     required this.onSelectWelcome,
     required this.onSelectRules,
+    this.onSelectLeaderboard,
     required this.onOpenMembershipTiers,
     required this.onOpenFandomSettings,
     required this.onCreateChannel,
@@ -306,6 +308,21 @@ class WorkspaceSidebar extends StatelessWidget {
                         : null,
                     onTap: () {
                       onSelectRules();
+                      if (isDrawer) Navigator.of(context).pop();
+                    },
+                  ),
+                  _buildNavTile(
+                    context: context,
+                    icon: Icons.leaderboard_outlined,
+                    label: 'Bảng xếp hạng Hội viên',
+                    selected: activeSection == WorkspaceSection.leaderboard,
+                    trailing: const Icon(
+                      Icons.emoji_events_rounded,
+                      size: 16,
+                      color: Colors.amber,
+                    ),
+                    onTap: () {
+                      onSelectLeaderboard?.call();
                       if (isDrawer) Navigator.of(context).pop();
                     },
                   ),

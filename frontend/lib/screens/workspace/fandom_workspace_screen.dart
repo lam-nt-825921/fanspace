@@ -26,6 +26,7 @@ import 'widgets/channel_header_bar.dart';
 import 'widgets/chat_message_composer.dart';
 import 'widgets/chat_message_item.dart';
 import 'widgets/voice_channel_view.dart';
+import 'widgets/workspace_leaderboard_view.dart';
 import 'widgets/workspace_sidebar.dart';
 import 'widgets/workspace_welcome_view.dart';
 
@@ -33,6 +34,7 @@ import 'widgets/workspace_welcome_view.dart';
 enum WorkspaceSection {
   welcome,
   rules,
+  leaderboard,
   channel,
 }
 
@@ -764,6 +766,12 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
           _selectedChannel = null;
         });
       },
+      onSelectLeaderboard: () {
+        setState(() {
+          _activeSection = WorkspaceSection.leaderboard;
+          _selectedChannel = null;
+        });
+      },
       onOpenMembershipTiers: _showMembershipTiersModal,
       onOpenFandomSettings: _showFandomSettingsDialog,
       onCreateChannel: () => _showCreateOrEditChannelDialog(),
@@ -837,6 +845,11 @@ class _FandomWorkspaceScreenState extends State<FandomWorkspaceScreen> {
             });
           },
           onSelectChannel: _selectChannel,
+        );
+      case WorkspaceSection.leaderboard:
+        return WorkspaceLeaderboardView(
+          fandom: _fandom!,
+          onOpenMembershipTiers: _showMembershipTiersModal,
         );
       case WorkspaceSection.channel:
         if (_selectedChannel == null) {

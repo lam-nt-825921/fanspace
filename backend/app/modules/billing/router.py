@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.modules.billing.schemas import (
     FandomBankAccountOut,
     FandomBankAccountUpsert,
+    FandomLeaderboardOut,
     FandomLedgerResponse,
     FandomMembershipsListOut,
     ManualTransactionResolveRequest,
@@ -310,3 +311,29 @@ async def resolve_transaction_manually(
         current_user=current_user,
         data=data,
     )
+
+
+# ---------------------------------------------------------------------------
+# 6. Dual-Tab Membership Leaderboard (Spending & Streak)
+# ---------------------------------------------------------------------------
+
+
+@billing_router.get(
+    "/fandoms/{identifier}/leaderboard",
+    response_model=FandomLeaderboardOut,
+    summary="Bảng xếp hạng Hội viên Fandom (2 Tabs: Theo tổng tiền ủng hộ & Theo chuỗi gia hạn)",
+)
+async def get_fandom_leaderboard(
+    identifier: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns the dual-tab Fandom Membership Leaderboard (Top Spending & Top Streak)."""
+    return await BillingService.get_fandom_leaderboard(
+        db=db,
+        identifier=identifier,
+        current_user=current_user,
+        limit=limit,
+    )
+
