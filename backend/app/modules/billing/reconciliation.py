@@ -390,6 +390,8 @@ def serialize_tier_out(
     expires_at: datetime | None = None,
 ) -> MembershipTierOut:
     """Maps a paid `Role` ORM instance into `MembershipTierOut`."""
+    from app.modules.rbac.models import MembershipPerkBit
+
     return MembershipTierOut(
         id=tier.id,
         fandom_id=tier.fandom_id,
@@ -398,6 +400,11 @@ def serialize_tier_out(
         icon_url=tier.icon_url,
         priority=tier.priority,
         permissions_bitmask=tier.permissions_bitmask,
+        membership_perks_bitmask=(
+            tier.membership_perks_bitmask
+            if tier.membership_perks_bitmask is not None
+            else int(MembershipPerkBit.DEFAULT_TIER_PERKS)
+        ),
         tier_level=tier.tier_level or 1,
         price_fiat_vnd=tier.price_fiat_vnd or 0,
         duration_days=tier.duration_days or 30,

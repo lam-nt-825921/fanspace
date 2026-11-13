@@ -335,6 +335,7 @@ class BillingService:
             permissions_bitmask=compute_tier_permissions_bitmask(
                 data.permissions_bitmask
             ),
+            membership_perks_bitmask=int(data.membership_perks_bitmask),
             is_preset_mod=False,
             is_membership_tier=True,
             tier_level=data.tier_level or (current_count + 1),

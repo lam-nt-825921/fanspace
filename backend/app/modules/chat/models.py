@@ -32,6 +32,12 @@ class Channel(Base):
     is_membership_only: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    min_membership_tier_level: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    membership_bypass_slowmode: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     required_role_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("roles.id", ondelete="SET NULL"),

@@ -305,6 +305,43 @@ class FandomPermissionBit {
   ];
 }
 
+/// Dedicated bitmask flags for paid Membership-exclusive perks (separated from RBAC permissions).
+class FandomMembershipPerkBit {
+  static const int exclusiveEmojis = 1 << 0; // 1
+  static const int exclusiveStickers = 1 << 1; // 2
+  static const int customNameColor = 1 << 2; // 4
+  static const int priorityChannelAccess = 1 << 3; // 8
+
+  static const int defaultAll =
+      exclusiveEmojis |
+      exclusiveStickers |
+      customNameColor |
+      priorityChannelAccess;
+
+  static const List<Map<String, dynamic>> allPerks = [
+    {
+      "bit": exclusiveEmojis,
+      "name": "Emoji Độc Quyền Fandom",
+      "desc": "Cho phép sử dụng các Emoji độc quyền ứng với cấp độ gói",
+    },
+    {
+      "bit": exclusiveStickers,
+      "name": "Sticker Độc Quyền Fandom",
+      "desc": "Cho phép gửi bộ Sticker cỡ lớn độc quyền trong khung chat",
+    },
+    {
+      "bit": customNameColor,
+      "name": "Huy Hiệu & Màu Tên VIP",
+      "desc": "Hiển thị huy hiệu và màu tên nổi bật cho Hội viên",
+    },
+    {
+      "bit": priorityChannelAccess,
+      "name": "Đặc Quyền Kênh Hội Viên",
+      "desc": "Truy cập kênh VIP theo cấp gói & miễn Slow-mode khi được bật",
+    },
+  ];
+}
+
 class RoleModel {
   final String id;
   final String fandomId;
@@ -312,6 +349,7 @@ class RoleModel {
   final String colorHex;
   final int priority;
   final int permissionsBitmask;
+  final int membershipPerksBitmask;
   final bool isPresetMod;
   final bool isMembershipTier;
   final int? tierLevel;
@@ -327,6 +365,7 @@ class RoleModel {
     this.colorHex = '#808080',
     this.priority = 0,
     this.permissionsBitmask = 0,
+    this.membershipPerksBitmask = FandomMembershipPerkBit.defaultAll,
     this.isPresetMod = false,
     this.isMembershipTier = false,
     this.tierLevel,
@@ -347,6 +386,8 @@ class RoleModel {
       colorHex: json['color_hex'] ?? '#808080',
       priority: json['priority'] ?? 0,
       permissionsBitmask: json['permissions_bitmask'] ?? 0,
+      membershipPerksBitmask:
+          json['membership_perks_bitmask'] ?? FandomMembershipPerkBit.defaultAll,
       isPresetMod: json['is_preset_mod'] ?? false,
       isMembershipTier: json['is_membership_tier'] ?? false,
       tierLevel: json['tier_level'],
@@ -494,6 +535,7 @@ class MembershipTierModel {
   final String colorHex;
   final int priority;
   final int permissionsBitmask;
+  final int membershipPerksBitmask;
   final int priceFiatVnd;
   final int durationDays;
   final String? iconUrl;
@@ -509,6 +551,7 @@ class MembershipTierModel {
     this.colorHex = '#FFD700',
     this.priority = 50,
     this.permissionsBitmask = 0,
+    this.membershipPerksBitmask = FandomMembershipPerkBit.defaultAll,
     required this.priceFiatVnd,
     this.durationDays = 30,
     this.iconUrl,
@@ -521,6 +564,8 @@ class MembershipTierModel {
       (permissionsBitmask & bit) != 0 ||
       (permissionsBitmask & FandomPermissionBit.administrator) != 0;
 
+  bool hasPerk(int bit) => (membershipPerksBitmask & bit) != 0;
+
   factory MembershipTierModel.fromJson(Map<String, dynamic> json) {
     return MembershipTierModel(
       id: json['id']?.toString() ?? '',
@@ -530,6 +575,8 @@ class MembershipTierModel {
       colorHex: json['color_hex'] ?? '#FFD700',
       priority: json['priority'] ?? 50,
       permissionsBitmask: json['permissions_bitmask'] ?? 0,
+      membershipPerksBitmask:
+          json['membership_perks_bitmask'] ?? FandomMembershipPerkBit.defaultAll,
       priceFiatVnd: json['price_fiat_vnd'] ?? 0,
       durationDays: json['duration_days'] ?? 30,
       iconUrl: json['icon_url'],

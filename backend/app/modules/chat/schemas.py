@@ -37,6 +37,16 @@ class ChannelCreate(BaseModel):
         default=False,
         description="Kênh giới hạn dành riêng cho thành viên có gói hội viên",
     )
+    min_membership_tier_level: int = Field(
+        default=0,
+        ge=0,
+        le=4,
+        description="Cấp độ gói Hội viên tối thiểu (0 = mọi gói Hội viên, 1..4 = từ Tier N trở lên)",
+    )
+    membership_bypass_slowmode: bool = Field(
+        default=False,
+        description="Cho phép Hội viên có đặc quyền Kênh ưu tiên được miễn Slow-mode trong kênh này",
+    )
     required_role_id: uuid.UUID | None = Field(
         default=None,
         description="Mã định danh vai trò cụ thể yêu cầu để truy cập kênh",
@@ -89,6 +99,16 @@ class ChannelUpdate(BaseModel):
         default=None,
         description="Cập nhật chế độ giới hạn hội viên",
     )
+    min_membership_tier_level: int | None = Field(
+        default=None,
+        ge=0,
+        le=4,
+        description="Cấp độ gói Hội viên tối thiểu (0..4)",
+    )
+    membership_bypass_slowmode: bool | None = Field(
+        default=None,
+        description="Cho phép Hội viên miễn Slow-mode trong kênh",
+    )
     required_role_id: uuid.UUID | None = Field(
         default=None,
         description="Vai trò yêu cầu mới",
@@ -116,6 +136,8 @@ class ChannelOut(BaseModel):
     position: int
     is_announcement: bool
     is_membership_only: bool
+    min_membership_tier_level: int = 0
+    membership_bypass_slowmode: bool = False
     required_role_id: uuid.UUID | None = None
     slow_mode_seconds: int
     voice_room_type: str | None = None

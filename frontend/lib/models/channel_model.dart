@@ -60,6 +60,8 @@ class ChannelModel {
   final int position;
   final bool isAnnouncement;
   final bool isMembershipOnly;
+  final int minMembershipTierLevel;
+  final bool membershipBypassSlowmode;
   final String? requiredRoleId;
   final int slowModeSeconds;
   final String? voiceRoomType;
@@ -116,6 +118,8 @@ class ChannelModel {
     this.position = 0,
     this.isAnnouncement = false,
     this.isMembershipOnly = false,
+    this.minMembershipTierLevel = 0,
+    this.membershipBypassSlowmode = false,
     this.requiredRoleId,
     this.slowModeSeconds = 0,
     this.voiceRoomType,
@@ -180,6 +184,10 @@ class ChannelModel {
       position: json['position'] is int ? json['position'] as int : 0,
       isAnnouncement: json['is_announcement'] == true,
       isMembershipOnly: json['is_membership_only'] == true,
+      minMembershipTierLevel: json['min_membership_tier_level'] is int
+          ? json['min_membership_tier_level'] as int
+          : 0,
+      membershipBypassSlowmode: json['membership_bypass_slowmode'] == true,
       requiredRoleId: json['required_role_id']?.toString(),
       slowModeSeconds:
           json['slow_mode_seconds'] is int ? json['slow_mode_seconds'] as int : 0,

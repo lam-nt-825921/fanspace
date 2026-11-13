@@ -162,6 +162,34 @@ class ChannelService:
             await db.refresh(ch)
         return defaults
 
+    @staticmethod
+    def _serialize_channel_out(
+        channel: Channel,
+        effective_perms: frozenset[Permission],
+    ) -> ChannelOut:
+        """Maps a `Channel` ORM entity and effective permissions to `ChannelOut`."""
+        return ChannelOut(
+            id=channel.id,
+            fandom_id=channel.fandom_id,
+            name=channel.name,
+            type=channel.type,
+            topic=channel.topic,
+            position=channel.position,
+            is_announcement=channel.is_announcement,
+            is_membership_only=channel.is_membership_only,
+            min_membership_tier_level=int(
+                getattr(channel, "min_membership_tier_level", 0) or 0
+            ),
+            membership_bypass_slowmode=bool(
+                getattr(channel, "membership_bypass_slowmode", False)
+            ),
+            required_role_id=channel.required_role_id,
+            slow_mode_seconds=channel.slow_mode_seconds,
+            voice_room_type=channel.voice_room_type,
+            created_at=channel.created_at,
+            my_permissions=sorted(p.value for p in effective_perms),
+        )
+
     @classmethod
     async def list_channels(
         cls,
@@ -208,21 +236,7 @@ class ChannelService:
                 continue
 
             accessible_channels.append(
-                ChannelOut(
-                    id=channel.id,
-                    fandom_id=channel.fandom_id,
-                    name=channel.name,
-                    type=channel.type,
-                    topic=channel.topic,
-                    position=channel.position,
-                    is_announcement=channel.is_announcement,
-                    is_membership_only=channel.is_membership_only,
-                    required_role_id=channel.required_role_id,
-                    slow_mode_seconds=channel.slow_mode_seconds,
-                    voice_room_type=channel.voice_room_type,
-                    created_at=channel.created_at,
-                    my_permissions=sorted(p.value for p in effective_perms),
-                )
+                cls._serialize_channel_out(channel, effective_perms)
             )
 
         return FandomChannelsListResponse(
@@ -283,6 +297,16 @@ class ChannelService:
             position=next_position,
             is_announcement=data.is_announcement if data.type == "TEXT" else False,
             is_membership_only=data.is_membership_only,
+            min_membership_tier_level=(
+                int(data.min_membership_tier_level or 0)
+                if data.is_membership_only
+                else 0
+            ),
+            membership_bypass_slowmode=(
+                bool(data.membership_bypass_slowmode)
+                if data.type == "TEXT"
+                else False
+            ),
             required_role_id=data.required_role_id,
             slow_mode_seconds=data.slow_mode_seconds if data.type == "TEXT" else 0,
             voice_room_type=voice_type,
@@ -302,21 +326,7 @@ class ChannelService:
             else frozenset(raw_perms)
         )
 
-        return ChannelOut(
-            id=channel.id,
-            fandom_id=channel.fandom_id,
-            name=channel.name,
-            type=channel.type,
-            topic=channel.topic,
-            position=channel.position,
-            is_announcement=channel.is_announcement,
-            is_membership_only=channel.is_membership_only,
-            required_role_id=channel.required_role_id,
-            slow_mode_seconds=channel.slow_mode_seconds,
-            voice_room_type=channel.voice_room_type,
-            created_at=channel.created_at,
-            my_permissions=sorted(p.value for p in effective_perms),
-        )
+        return cls._serialize_channel_out(channel, effective_perms)
 
     @classmethod
     async def update_channel(
@@ -383,8 +393,20 @@ class ChannelService:
 
         if data.is_membership_only is not None:
             channel.is_membership_only = data.is_membership_only
+            if not data.is_membership_only:
+                channel.min_membership_tier_level = 0
 
-        if data.required_role_id is not None:
+        if data.min_membership_tier_level is not None:
+            channel.min_membership_tier_level = (
+                int(data.min_membership_tier_level)
+                if channel.is_membership_only
+                else 0
+            )
+
+        if data.membership_bypass_slowmode is not None and channel.type == "TEXT":
+            channel.membership_bypass_slowmode = data.membership_bypass_slowmode
+
+        if "required_role_id" in data.model_fields_set:
             channel.required_role_id = data.required_role_id
 
         if data.slow_mode_seconds is not None and channel.type == "TEXT":
@@ -407,21 +429,7 @@ class ChannelService:
             else frozenset(raw_perms)
         )
 
-        return ChannelOut(
-            id=channel.id,
-            fandom_id=channel.fandom_id,
-            name=channel.name,
-            type=channel.type,
-            topic=channel.topic,
-            position=channel.position,
-            is_announcement=channel.is_announcement,
-            is_membership_only=channel.is_membership_only,
-            required_role_id=channel.required_role_id,
-            slow_mode_seconds=channel.slow_mode_seconds,
-            voice_room_type=channel.voice_room_type,
-            created_at=channel.created_at,
-            my_permissions=sorted(p.value for p in effective_perms),
-        )
+        return cls._serialize_channel_out(channel, effective_perms)
 
     @classmethod
     async def delete_channel(

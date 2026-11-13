@@ -717,6 +717,7 @@ class FandomProvider extends ChangeNotifier {
     String colorHex = '#FFD700',
     int priority = 50,
     int permissionsBitmask = 0,
+    int membershipPerksBitmask = FandomMembershipPerkBit.defaultAll,
     required int priceFiatVnd,
     int durationDays = 30,
     String? iconUrl,
@@ -730,6 +731,7 @@ class FandomProvider extends ChangeNotifier {
           'color_hex': colorHex,
           'priority': priority,
           'permissions_bitmask': permissionsBitmask,
+          'membership_perks_bitmask': membershipPerksBitmask,
           'price_fiat_vnd': priceFiatVnd,
           'duration_days': durationDays,
           if (iconUrl != null && iconUrl.trim().isNotEmpty)
@@ -757,6 +759,7 @@ class FandomProvider extends ChangeNotifier {
     String? colorHex,
     int? priority,
     int? permissionsBitmask,
+    int? membershipPerksBitmask,
     int? priceFiatVnd,
     int? durationDays,
     String? iconUrl,
@@ -769,6 +772,9 @@ class FandomProvider extends ChangeNotifier {
       if (priority != null) payload['priority'] = priority;
       if (permissionsBitmask != null) {
         payload['permissions_bitmask'] = permissionsBitmask;
+      }
+      if (membershipPerksBitmask != null) {
+        payload['membership_perks_bitmask'] = membershipPerksBitmask;
       }
       if (priceFiatVnd != null) payload['price_fiat_vnd'] = priceFiatVnd;
       if (durationDays != null) payload['duration_days'] = durationDays;

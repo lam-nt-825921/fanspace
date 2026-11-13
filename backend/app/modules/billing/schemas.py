@@ -55,6 +55,11 @@ class MembershipTierCreate(BaseModel):
     )
     priority: int = Field(default=50, ge=1, le=900, description="Thứ bậc ưu tiên hiển thị vai trò")
     permissions_bitmask: int = Field(default=0, ge=0, description="Bitmask quyền hạn đặc biệt đi kèm gói")
+    membership_perks_bitmask: int = Field(
+        default=15,
+        ge=0,
+        description="Bitmask đặc quyền Hội viên tách biệt (Emoji, Sticker, Huy hiệu VIP, Kênh ưu tiên)",
+    )
     price_fiat_vnd: int = Field(
         ...,
         ge=2000,
@@ -78,6 +83,7 @@ class MembershipTierUpdate(BaseModel):
     color_hex: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     priority: int | None = Field(default=None, ge=1, le=900)
     permissions_bitmask: int | None = Field(default=None, ge=0)
+    membership_perks_bitmask: int | None = Field(default=None, ge=0)
     price_fiat_vnd: int | None = Field(default=None, ge=2000, le=100_000_000)
     duration_days: int | None = Field(default=None, ge=1, le=3650)
     icon_url: str | None = Field(default=None)
@@ -93,6 +99,7 @@ class MembershipTierOut(BaseModel):
     color_hex: str
     priority: int
     permissions_bitmask: int
+    membership_perks_bitmask: int = 15
     price_fiat_vnd: int
     duration_days: int
     icon_url: str | None = None

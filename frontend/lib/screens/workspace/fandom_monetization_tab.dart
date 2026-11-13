@@ -383,7 +383,7 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
                             ),
                           ),
                           Text(
-                            '${formatVndCurrency(tier.priceFiatVnd)} / ${tier.durationDays} ngày',
+                            '${formatVndCurrency(tier.priceFiatVnd)} / ${tier.durationDays} ngày • ${FandomMembershipPerkBit.allPerks.where((p) => tier.hasPerk(p['bit'] as int)).length}/4 đặc quyền MBS',
                             style: const TextStyle(
                               color: AppTheme.success,
                               fontSize: 12,
@@ -391,6 +391,21 @@ class _FandomMonetizationTabState extends State<FandomMonetizationTab> {
                             ),
                           ),
                         ],
+                      ),
+                    ),
+                    IconButton(
+                      key: Key('btn_edit_tier_${tier.id}'),
+                      tooltip: 'Chỉnh sửa gói & đặc quyền Hội viên',
+                      icon: Icon(
+                        Icons.edit_outlined,
+                        color: palette.textSecondary,
+                        size: 20,
+                      ),
+                      onPressed: () => EditMembershipTierDialog.show(
+                        context,
+                        fandomId: widget.fandom.id,
+                        existingTier: tier,
+                        onUpdated: _loadMonetizationData,
                       ),
                     ),
                     IconButton(
