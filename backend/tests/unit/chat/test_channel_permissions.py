@@ -146,3 +146,123 @@ async def test_channel_crud_with_mock_permissions():
     finally:
         app.dependency_overrides.pop(get_permission_checker, None)
         await _cleanup_channel_test_data([owner_id, regular_id], [fandom_id])
+
+
+@pytest.mark.asyncio
+async def test_channel_crud_with_extended_fr10_fields():
+    """Verifies FR-10 extended channel fields: max_members, allowed_role_ids, role/membership bitmasks."""
+    from app.modules.rbac.models import Role
+
+    suffix = uuid.uuid4().hex[:8]
+    owner = User(
+        username=f"fr10_owner_{suffix}",
+        email=f"fr10_owner_{suffix}@test.fanspace.vn",
+        password_hash=get_password_hash("Password123!"),
+        display_name="FR10 Owner",
+        is_active=True,
+    )
+
+    async with AsyncSessionLocal() as db:
+        db.add(owner)
+        await db.flush()
+
+        fandom = Fandom(
+            name=f"FR10 Extended Fandom {suffix}",
+            slug=f"fr10-ext-fandom-{suffix}",
+            description="Fandom kiểm thử FR-10 mở rộng",
+            category="Âm nhạc",
+            admission_mode="OPEN",
+            is_public=True,
+            member_count=1,
+            owner_id=owner.id,
+        )
+        db.add(fandom)
+        await db.flush()
+
+        role1 = Role(
+            fandom_id=fandom.id,
+            name="Role A",
+            color_hex="#10B981",
+            priority=10,
+            permissions_bitmask=3,
+        )
+        role2 = Role(
+            fandom_id=fandom.id,
+            name="Role B",
+            color_hex="#3B82F6",
+            priority=20,
+            permissions_bitmask=3,
+        )
+        db.add_all([role1, role2])
+        await db.commit()
+
+        owner_id = owner.id
+        fandom_id = fandom.id
+        slug = fandom.slug
+        role_a = role1.id
+        role_b = role2.id
+
+    try:
+        token = create_access_token(data={"sub": str(owner_id)})
+        app.dependency_overrides[get_permission_checker] = lambda: MockPermissionChecker(
+            granted={
+                Permission.VIEW_CHANNEL,
+                Permission.READ_MESSAGES,
+                Permission.MANAGE_CHANNELS,
+            }
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            create_res = await ac.post(
+                f"/api/v1/fandoms/{slug}/channels",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "name": "phong-hop-vip",
+                    "type": "TEXT",
+                    "topic": "Phòng thảo luận giới hạn 50 người và nhiều Role",
+                    "max_members": 50,
+                    "slow_mode_seconds": 15,
+                    "allowed_role_ids": [str(role_a), str(role_b)],
+                    "role_permissions_bitmask": 32783,
+                    "is_membership_only": True,
+                    "min_membership_tier_level": 2,
+                    "membership_bypass_slowmode": True,
+                    "membership_permissions_bitmask": 32783,
+                },
+            )
+            assert create_res.status_code == 201, create_res.text
+            created = create_res.json()
+            assert created["max_members"] == 50
+            assert created["slow_mode_seconds"] == 15
+            assert created["allowed_role_ids"] == [str(role_a), str(role_b)]
+            assert created["required_role_id"] == str(role_a)
+            assert created["role_permissions_bitmask"] == 32783
+            assert created["membership_permissions_bitmask"] == 32783
+            assert created["membership_bypass_slowmode"] is True
+            ch_id = created["id"]
+
+            update_res = await ac.put(
+                f"/api/v1/fandoms/{slug}/channels/{ch_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "max_members": 120,
+                    "slow_mode_seconds": 60,
+                    "allowed_role_ids": [str(role_b)],
+                    "role_permissions_bitmask": 3,
+                    "membership_permissions_bitmask": 1,
+                    "membership_bypass_slowmode": False,
+                },
+            )
+            assert update_res.status_code == 200, update_res.text
+            updated = update_res.json()
+            assert updated["max_members"] == 120
+            assert updated["slow_mode_seconds"] == 60
+            assert updated["allowed_role_ids"] == [str(role_b)]
+            assert updated["required_role_id"] == str(role_b)
+            assert updated["role_permissions_bitmask"] == 3
+            assert updated["membership_permissions_bitmask"] == 1
+            assert updated["membership_bypass_slowmode"] is False
+    finally:
+        app.dependency_overrides.pop(get_permission_checker, None)
+        await _cleanup_channel_test_data([owner_id], [fandom_id])
+

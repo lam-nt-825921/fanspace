@@ -43,6 +43,14 @@ class Channel(Base):
         ForeignKey("roles.id", ondelete="SET NULL"),
         nullable=True,
     )
+    allowed_role_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    max_members: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    role_permissions_bitmask: Mapped[int] = mapped_column(
+        Integer, default=32831, nullable=False
+    )
+    membership_permissions_bitmask: Mapped[int] = mapped_column(
+        Integer, default=32831, nullable=False
+    )
     slow_mode_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     voice_room_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

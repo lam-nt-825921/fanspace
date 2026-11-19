@@ -177,9 +177,11 @@ async def connect(sid: str, environ: dict, auth: dict | None = None) -> bool:
 async def join_channel(sid: str, data: dict) -> dict:
     """Subscribes a connected socket client to a channel real-time broadcast room.
 
+    Enforces `Channel.max_members` concurrent occupancy limit when `max_members > 0`.
+
     Args:
         sid: Socket connection ID.
-        data: Payload containing `channel_id`.
+        data: Payload containing `channel_id` and optional `user_id`.
 
     Returns:
         dict: Acknowledgment payload.
@@ -187,8 +189,52 @@ async def join_channel(sid: str, data: dict) -> dict:
     channel_id = data.get("channel_id") if isinstance(data, dict) else None
     if not channel_id:
         return {"ok": False, "error": "Thiếu mã định danh kênh."}
-    await sio.enter_room(sid, f"channel:{channel_id}")
-    return {"ok": True, "room": f"channel:{channel_id}"}
+
+    member_token = str(data.get("user_id") or sid)
+    active_key = f"channel:active_members:{channel_id}"
+
+    try:
+        import uuid
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal
+        from app.modules.chat.models import Channel
+
+        parsed_channel_id = uuid.UUID(str(channel_id))
+        async with AsyncSessionLocal() as db:
+            res = await db.execute(
+                select(Channel.max_members).where(Channel.id == parsed_channel_id)
+            )
+            max_members = int(res.scalar_one_or_none() or 0)
+    except Exception:
+        max_members = 0
+
+    active_count = 0
+    try:
+        is_already_member = await redis_client.sismember(active_key, member_token)
+        current_count = int(await redis_client.scard(active_key) or 0)
+        if max_members > 0 and not is_already_member and current_count >= max_members:
+            return {
+                "ok": False,
+                "error": f"Kênh đã đạt giới hạn tối đa {max_members} người tham gia đồng thời.",
+                "active_members_count": current_count,
+                "max_members": max_members,
+            }
+        await redis_client.sadd(active_key, member_token)
+        await redis_client.expire(active_key, 3600)
+        active_count = int(await redis_client.scard(active_key) or 1)
+    except Exception:
+        active_count = 1
+
+    try:
+        await sio.enter_room(sid, f"channel:{channel_id}")
+    except ValueError:
+        pass
+    return {
+        "ok": True,
+        "room": f"channel:{channel_id}",
+        "active_members_count": active_count,
+        "max_members": max_members,
+    }
 
 
 @sio.event
@@ -197,14 +243,22 @@ async def leave_channel(sid: str, data: dict) -> dict:
 
     Args:
         sid: Socket connection ID.
-        data: Payload containing `channel_id`.
+        data: Payload containing `channel_id` and optional `user_id`.
 
     Returns:
         dict: Acknowledgment payload.
     """
     channel_id = data.get("channel_id") if isinstance(data, dict) else None
     if channel_id:
-        await sio.leave_room(sid, f"channel:{channel_id}")
+        member_token = str(data.get("user_id") or sid) if isinstance(data, dict) else sid
+        try:
+            await redis_client.srem(f"channel:active_members:{channel_id}", member_token)
+        except Exception:
+            pass
+        try:
+            await sio.leave_room(sid, f"channel:{channel_id}")
+        except ValueError:
+            pass
     return {"ok": True}
 
 

@@ -51,6 +51,26 @@ class ChannelCreate(BaseModel):
         default=None,
         description="Mã định danh vai trò cụ thể yêu cầu để truy cập kênh",
     )
+    allowed_role_ids: list[uuid.UUID] | None = Field(
+        default=None,
+        description="Danh sách các Vai trò nội bộ được phép truy cập kênh (hỗ trợ chọn nhiều Role)",
+    )
+    max_members: int = Field(
+        default=0,
+        ge=0,
+        le=100000,
+        description="Giới hạn số người tham gia đồng thời trong kênh (0 = Không giới hạn)",
+    )
+    role_permissions_bitmask: int = Field(
+        default=32831,
+        ge=0,
+        description="Bitmask quyền chi tiết cấp cho nhóm Vai trò nội bộ trên kênh này",
+    )
+    membership_permissions_bitmask: int = Field(
+        default=32831,
+        ge=0,
+        description="Bitmask quyền chi tiết cấp cho nhóm Hội viên VIP trên kênh này",
+    )
     slow_mode_seconds: int = Field(
         default=0,
         ge=0,
@@ -113,6 +133,26 @@ class ChannelUpdate(BaseModel):
         default=None,
         description="Vai trò yêu cầu mới",
     )
+    allowed_role_ids: list[uuid.UUID] | None = Field(
+        default=None,
+        description="Danh sách các Vai trò nội bộ được phép truy cập kênh",
+    )
+    max_members: int | None = Field(
+        default=None,
+        ge=0,
+        le=100000,
+        description="Giới hạn số người tham gia đồng thời trong kênh (0 = Không giới hạn)",
+    )
+    role_permissions_bitmask: int | None = Field(
+        default=None,
+        ge=0,
+        description="Bitmask quyền chi tiết cấp cho nhóm Vai trò nội bộ trên kênh",
+    )
+    membership_permissions_bitmask: int | None = Field(
+        default=None,
+        ge=0,
+        description="Bitmask quyền chi tiết cấp cho nhóm Hội viên VIP trên kênh",
+    )
     slow_mode_seconds: int | None = Field(
         default=None,
         ge=0,
@@ -139,6 +179,13 @@ class ChannelOut(BaseModel):
     min_membership_tier_level: int = 0
     membership_bypass_slowmode: bool = False
     required_role_id: uuid.UUID | None = None
+    allowed_role_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="Danh sách các Vai trò nội bộ được phép truy cập kênh",
+    )
+    max_members: int = 0
+    role_permissions_bitmask: int = 32831
+    membership_permissions_bitmask: int = 32831
     slow_mode_seconds: int
     voice_room_type: str | None = None
     created_at: datetime

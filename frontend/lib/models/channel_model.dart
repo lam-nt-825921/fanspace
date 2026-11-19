@@ -50,6 +50,26 @@ class PermissionSpec {
   }
 }
 
+/// Bitmask constants for granular channel-level Role and Membership permissions (FR-10).
+class ChannelPermissionBit {
+  static const int readMessages = 1 << 0; // 1
+  static const int sendMessages = 1 << 1; // 2
+  static const int embedLinks = 1 << 2; // 4
+  static const int attachFiles = 1 << 3; // 8
+  static const int voiceConnect = 1 << 4; // 16
+  static const int voiceSpeak = 1 << 5; // 32
+  static const int bypassSlowmode = 1 << 15; // 32768
+
+  static const int defaultChannelMask =
+      readMessages |
+      sendMessages |
+      embedLinks |
+      attachFiles |
+      voiceConnect |
+      voiceSpeak |
+      bypassSlowmode; // 32831
+}
+
 /// Represents a single communication channel (Text, Announcement, or Voice) in a Fandom.
 class ChannelModel {
   final String id;
@@ -63,6 +83,10 @@ class ChannelModel {
   final int minMembershipTierLevel;
   final bool membershipBypassSlowmode;
   final String? requiredRoleId;
+  final List<String> allowedRoleIds;
+  final int maxMembers;
+  final int rolePermissionsBitmask;
+  final int membershipPermissionsBitmask;
   final int slowModeSeconds;
   final String? voiceRoomType;
   final DateTime? createdAt;
@@ -121,6 +145,10 @@ class ChannelModel {
     this.minMembershipTierLevel = 0,
     this.membershipBypassSlowmode = false,
     this.requiredRoleId,
+    this.allowedRoleIds = const [],
+    this.maxMembers = 0,
+    this.rolePermissionsBitmask = ChannelPermissionBit.defaultChannelMask,
+    this.membershipPermissionsBitmask = ChannelPermissionBit.defaultChannelMask,
     this.slowModeSeconds = 0,
     this.voiceRoomType,
     this.createdAt,
@@ -175,6 +203,21 @@ class ChannelModel {
 
   factory ChannelModel.fromJson(Map<String, dynamic> json) {
     final rawPerms = json['my_permissions'];
+    final rawAllowedRoles = json['allowed_role_ids'];
+    final reqRoleId = json['required_role_id']?.toString();
+    final parsedAllowedRoles = <String>[];
+    if (rawAllowedRoles is List) {
+      for (final item in rawAllowedRoles) {
+        final str = item?.toString() ?? '';
+        if (str.isNotEmpty && !parsedAllowedRoles.contains(str)) {
+          parsedAllowedRoles.add(str);
+        }
+      }
+    }
+    if (parsedAllowedRoles.isEmpty && reqRoleId != null && reqRoleId.isNotEmpty) {
+      parsedAllowedRoles.add(reqRoleId);
+    }
+
     return ChannelModel(
       id: json['id']?.toString() ?? '',
       fandomId: json['fandom_id']?.toString() ?? '',
@@ -188,7 +231,16 @@ class ChannelModel {
           ? json['min_membership_tier_level'] as int
           : 0,
       membershipBypassSlowmode: json['membership_bypass_slowmode'] == true,
-      requiredRoleId: json['required_role_id']?.toString(),
+      requiredRoleId:
+          reqRoleId ?? (parsedAllowedRoles.isNotEmpty ? parsedAllowedRoles.first : null),
+      allowedRoleIds: parsedAllowedRoles,
+      maxMembers: json['max_members'] is int ? json['max_members'] as int : 0,
+      rolePermissionsBitmask: json['role_permissions_bitmask'] is int
+          ? json['role_permissions_bitmask'] as int
+          : ChannelPermissionBit.defaultChannelMask,
+      membershipPermissionsBitmask: json['membership_permissions_bitmask'] is int
+          ? json['membership_permissions_bitmask'] as int
+          : ChannelPermissionBit.defaultChannelMask,
       slowModeSeconds:
           json['slow_mode_seconds'] is int ? json['slow_mode_seconds'] as int : 0,
       voiceRoomType: json['voice_room_type']?.toString(),
