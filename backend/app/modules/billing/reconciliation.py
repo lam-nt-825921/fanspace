@@ -37,8 +37,8 @@ from app.modules.rbac.models import PermissionBit, Role
 settings = get_settings()
 
 MAX_MEMBERSHIP_TIERS_PER_FANDOM: int = 4
-_DH_CODE_PATTERN = re.compile(r"\b(DH\d{4,12})\b", re.IGNORECASE)
-_DH_CODE_FALLBACK_PATTERN = re.compile(r"(DH\d{4,12})", re.IGNORECASE)
+_DH_CODE_PATTERN = re.compile(r"\b(DH\d{3,10})\b", re.IGNORECASE)
+_DH_CODE_FALLBACK_PATTERN = re.compile(r"(DH\d{3,10})", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

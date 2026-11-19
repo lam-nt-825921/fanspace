@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     SEPAY_PAYMENT_CODE_PREFIX: str = "DH"
     SEPAY_ORDER_TTL_MINUTES: int = 15
     SEPAY_GRACE_PERIOD_MINUTES: int = 5
+    SEPAY_ALLOW_SANDBOX_SIMULATE: bool = True
 
     LIVEKIT_URL: str = ""
     LIVEKIT_API_KEY: str = ""

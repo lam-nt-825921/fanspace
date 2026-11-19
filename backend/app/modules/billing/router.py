@@ -231,21 +231,38 @@ async def cancel_payment_order(
     "/billing/sepay-webhook",
     response_model=SepayWebhookResponse,
     status_code=status.HTTP_200_OK,
-    summary="Webhook tiếp nhận biến động số dư từ SePay (Xác thực HMAC-SHA256)",
+    summary="Webhook tiếp nhận biến động số dư từ SePay (Xác thực HMAC-SHA256 / Apikey, hỗ trợ JSON & Form)",
 )
 async def receive_sepay_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Verifies SePay HMAC-SHA256 signature and runs 3-Way Matching in an ACID transaction."""
+    """Verifies SePay HMAC-SHA256 / Apikey signature and runs 3-Way Matching in an ACID transaction.
+
+    Supports `application/json`, `application/x-www-form-urlencoded`, and `multipart/form-data`.
+    """
     raw_body = await request.body()
     BillingService.verify_sepay_webhook_signature(
         raw_body=raw_body,
         headers=request.headers,
     )
 
+    content_type = (request.headers.get("content-type") or "").lower()
     try:
-        payload = SepayWebhookPayload.model_validate_json(raw_body)
+        if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            form_data = await request.form()
+            form_dict = {k: v for k, v in form_data.items() if not hasattr(v, "read")}
+            payload = SepayWebhookPayload.model_validate(form_dict)
+        else:
+            try:
+                payload = SepayWebhookPayload.model_validate_json(raw_body)
+            except ValidationError:
+                form_data = await request.form()
+                if form_data:
+                    form_dict = {k: v for k, v in form_data.items() if not hasattr(v, "read")}
+                    payload = SepayWebhookPayload.model_validate(form_dict)
+                else:
+                    raise
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -266,7 +283,15 @@ async def simulate_sepay_webhook(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Simulates an incoming SePay webhook call for testing order reconciliation locally."""
+    """Simulates an incoming SePay webhook call for testing order reconciliation in sandbox/demo mode."""
+    from app.core.config import get_settings
+
+    active_settings = get_settings()
+    if not getattr(active_settings, "SEPAY_ALLOW_SANDBOX_SIMULATE", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tính năng giả lập Webhook SePay đã bị tắt trên môi trường này.",
+        )
     return await BillingService.simulate_sepay_webhook(db=db, data=data)
 
 

@@ -571,10 +571,35 @@ class BillingService:
     # ------------------------------------------------------------------
 
     @staticmethod
+    async def _recover_idempotent_replay(
+        db: AsyncSession, sepay_tx_id: int
+    ) -> SepayWebhookResponse | None:
+        """Rolls back a failed duplicate insert and returns an idempotent 200 OK response."""
+        await db.rollback()
+        existing_res = await db.execute(
+            select(PaymentTransaction).where(
+                PaymentTransaction.sepay_transaction_id == sepay_tx_id
+            )
+        )
+        existing_tx = existing_res.scalar_one_or_none()
+        if existing_tx is None:
+            return None
+        return SepayWebhookResponse(
+            success=True,
+            idempotent_replay=True,
+            reconciliation_status=existing_tx.reconciliation_status,
+            order_code=existing_tx.code,
+            order_status=None,
+            message=f"Giao dịch SePay #{sepay_tx_id} đã được xử lý trước đó (Idempotency Replay).",
+        )
+
+    @staticmethod
     async def process_sepay_webhook(
         db: AsyncSession, payload: SepayWebhookPayload
     ) -> SepayWebhookResponse:
         """Processes an incoming SePay webhook inside an atomic PostgreSQL ACID transaction."""
+        from sqlalchemy.exc import IntegrityError
+
         existing_res = await db.execute(
             select(PaymentTransaction).where(
                 PaymentTransaction.sepay_transaction_id == payload.id
@@ -588,7 +613,6 @@ class BillingService:
                 reconciliation_status=existing_tx.reconciliation_status,
                 order_code=existing_tx.code,
                 order_status=None,
-                transaction_id=existing_tx.id,
                 message=f"Giao dịch SePay #{payload.id} đã được xử lý trước đó (Idempotency Replay).",
             )
 
@@ -603,15 +627,20 @@ class BillingService:
                 code=extracted_code,
             )
             db.add(tx)
-            await db.commit()
-            await db.refresh(tx)
+            try:
+                await db.commit()
+                await db.refresh(tx)
+            except IntegrityError:
+                recovered = await BillingService._recover_idempotent_replay(db, payload.id)
+                if recovered is not None:
+                    return recovered
+                raise
             return SepayWebhookResponse(
                 success=True,
                 idempotent_replay=False,
                 reconciliation_status=tx.reconciliation_status,
                 order_code=extracted_code,
                 order_status=None,
-                transaction_id=tx.id,
                 message=tx.audit_note or "",
             )
 
@@ -623,6 +652,26 @@ class BillingService:
                 .with_for_update()
             )
             order = order_res.scalar_one_or_none()
+
+        # Re-check idempotency after acquiring row lock on order
+        post_lock_res = await db.execute(
+            select(PaymentTransaction).where(
+                PaymentTransaction.sepay_transaction_id == payload.id
+            )
+        )
+        post_lock_tx = post_lock_res.scalar_one_or_none()
+        if post_lock_tx is not None:
+            rec_status = post_lock_tx.reconciliation_status
+            rec_code = post_lock_tx.code
+            await db.rollback()
+            return SepayWebhookResponse(
+                success=True,
+                idempotent_replay=True,
+                reconciliation_status=rec_status,
+                order_code=rec_code,
+                order_status=None,
+                message=f"Giao dịch SePay #{payload.id} đã được xử lý trước đó (Idempotency Replay).",
+            )
 
         if order is None:
             orphan_fandom_id: uuid.UUID | None = None
@@ -645,15 +694,20 @@ class BillingService:
                 fandom_id=orphan_fandom_id,
             )
             db.add(tx)
-            await db.commit()
-            await db.refresh(tx)
+            try:
+                await db.commit()
+                await db.refresh(tx)
+            except IntegrityError:
+                recovered = await BillingService._recover_idempotent_replay(db, payload.id)
+                if recovered is not None:
+                    return recovered
+                raise
             return SepayWebhookResponse(
                 success=True,
                 idempotent_replay=False,
                 reconciliation_status=tx.reconciliation_status,
                 order_code=extracted_code,
                 order_status=None,
-                transaction_id=tx.id,
                 message=tx.audit_note or "",
             )
 
@@ -683,8 +737,14 @@ class BillingService:
             fandom_id=order.fandom_id,
         )
         db.add(tx)
-        await db.commit()
-        await db.refresh(tx)
+        try:
+            await db.commit()
+            await db.refresh(tx)
+        except IntegrityError:
+            recovered = await BillingService._recover_idempotent_replay(db, payload.id)
+            if recovered is not None:
+                return recovered
+            raise
 
         if decision.should_provision_role:
             await _emit_billing_event(
@@ -702,7 +762,6 @@ class BillingService:
             reconciliation_status=tx.reconciliation_status,
             order_code=order.order_code,
             order_status=order.status,
-            transaction_id=tx.id,
             message=audit_note,
         )
 
