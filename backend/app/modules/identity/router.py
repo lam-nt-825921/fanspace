@@ -258,6 +258,7 @@ async def google_oauth_callback(
     """Exchanges an authorization code with Google for tokens and logs the user in."""
     accept = request.headers.get("accept", "")
     is_browser = "text/html" in accept
+    frontend_base = (getattr(settings, "FRONTEND_URL", None) or "http://localhost:3000").rstrip("/")
 
     token_url = "https://oauth2.googleapis.com/token"
     async with httpx.AsyncClient() as client:
@@ -275,7 +276,7 @@ async def google_oauth_callback(
             error_detail = f"Lỗi trao đổi mã ủy quyền với Google: {res.text}"
             if is_browser:
                 return RedirectResponse(
-                    url=f"http://localhost:3000/auth/callback?error={urllib.parse.quote(error_detail)}"
+                    url=f"{frontend_base}/auth/callback?error={urllib.parse.quote(error_detail)}"
                 )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -287,7 +288,7 @@ async def google_oauth_callback(
             error_detail = "Phản hồi từ Google không chứa id_token hợp lệ."
             if is_browser:
                 return RedirectResponse(
-                    url=f"http://localhost:3000/auth/callback?error={urllib.parse.quote(error_detail)}"
+                    url=f"{frontend_base}/auth/callback?error={urllib.parse.quote(error_detail)}"
                 )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -302,7 +303,7 @@ async def google_oauth_callback(
     except HTTPException as exc:
         if is_browser:
             return RedirectResponse(
-                url=f"http://localhost:3000/auth/callback?error={urllib.parse.quote(str(exc.detail))}"
+                url=f"{frontend_base}/auth/callback?error={urllib.parse.quote(str(exc.detail))}"
             )
         raise exc
 
@@ -315,7 +316,7 @@ async def google_oauth_callback(
             "user": user_out.model_dump(mode="json"),
         }
         await redis.setex(f"oauth_ticket:{ticket}", 60, orjson.dumps(ticket_data).decode("utf-8"))
-        redirect_url = f"http://localhost:3000/auth/callback?ticket={ticket}"
+        redirect_url = f"{frontend_base}/auth/callback?ticket={ticket}"
         return RedirectResponse(url=redirect_url)
 
     return AuthResponse(

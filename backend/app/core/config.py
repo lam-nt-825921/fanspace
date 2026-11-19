@@ -99,10 +99,11 @@ class Settings(BaseSettings):
     AGORA_APP_CERTIFICATE: str = "5cfd2fd1755d40ecb72977518be15d3b"
     AGORA_TOKEN_TTL_SECONDS: int = 3600
 
-    # Google OAuth2
+    # Google OAuth2 & Frontend Callback Origin
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+    FRONTEND_URL: str = "http://localhost:3000"
 
     # SMTP Mailer (e.g. Gmail SMTP)
     SMTP_HOST: str = "smtp.gmail.com"
