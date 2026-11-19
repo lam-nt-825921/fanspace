@@ -62,15 +62,25 @@ async def init_db() -> None:
     """
     import app.models  # noqa: F401
     async with engine.begin() as conn:
+        # Acquire transaction-scoped advisory lock so multiple workers never run DDL concurrently
+        await conn.execute(text("SELECT pg_advisory_xact_lock(738291045);"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent;"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
         await conn.execute(
             text(
                 """
-                CREATE OR REPLACE FUNCTION f_unaccent(text)
-                RETURNS text AS $$
-                    SELECT translate(public.unaccent('public.unaccent', coalesce($1, '')), 'đĐ', 'dD');
-                $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT;
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_proc WHERE proname = 'f_unaccent'
+                    ) THEN
+                        CREATE FUNCTION f_unaccent(text)
+                        RETURNS text AS $func$
+                            SELECT translate(public.unaccent('public.unaccent', coalesce($1, '')), 'đĐ', 'dD');
+                        $func$ LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT;
+                    END IF;
+                END
+                $$;
                 """
             )
         )

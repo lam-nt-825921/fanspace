@@ -117,6 +117,22 @@ app.include_router(billing_router)
 
 
 @app.get(
+    "/",
+    tags=["System"],
+    summary="Thông tin cổng API FanSpace Backend",
+)
+async def root_info():
+    """Returns basic metadata and links to interactive API documentation."""
+    return {
+        "service": settings.PROJECT_NAME,
+        "status": "running",
+        "environment": settings.ENVIRONMENT,
+        "docs_url": "/docs",
+        "health_url": "/health",
+    }
+
+
+@app.get(
     "/health",
     tags=["System"],
     summary="Kiểm tra trạng thái sức khỏe hệ thống (Health Check)",
