@@ -294,3 +294,103 @@ class FandomChannelsDataModel {
     );
   }
 }
+
+/// Real-time participant inside a voice channel room (FR-11 / UC-06).
+class VoiceParticipantModel {
+  final String userId;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final String role;
+  final bool isMuted;
+  final bool isHandRaised;
+  final bool isOwner;
+  final DateTime? joinedAt;
+
+  const VoiceParticipantModel({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    this.avatarUrl,
+    this.role = 'LISTENER',
+    this.isMuted = true,
+    this.isHandRaised = false,
+    this.isOwner = false,
+    this.joinedAt,
+  });
+
+  bool get isSpeaker => role == 'SPEAKER';
+
+  factory VoiceParticipantModel.fromJson(Map<String, dynamic> json) {
+    return VoiceParticipantModel(
+      userId: json['user_id']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      displayName:
+          json['display_name']?.toString() ?? json['username']?.toString() ?? '',
+      avatarUrl: json['avatar_url']?.toString(),
+      role: json['role']?.toString() ?? 'LISTENER',
+      isMuted: json['is_muted'] != false,
+      isHandRaised: json['is_hand_raised'] == true,
+      isOwner: json['is_owner'] == true,
+      joinedAt: json['joined_at'] != null
+          ? DateTime.tryParse(json['joined_at'].toString())
+          : null,
+    );
+  }
+}
+
+/// Snapshot of a real-time voice channel room (Open Mic or Stage Room via Agora RTC).
+class VoiceRoomStateModel {
+  final String channelId;
+  final String fandomId;
+  final String channelName;
+  final String voiceRoomType;
+  final int maxMembers;
+  final int activeCount;
+  final List<VoiceParticipantModel> participants;
+  final List<String> raisedHandUserIds;
+
+  const VoiceRoomStateModel({
+    required this.channelId,
+    required this.fandomId,
+    this.channelName = '',
+    this.voiceRoomType = 'OPEN_MIC',
+    this.maxMembers = 0,
+    this.activeCount = 0,
+    this.participants = const [],
+    this.raisedHandUserIds = const [],
+  });
+
+  List<VoiceParticipantModel> get speakers =>
+      participants.where((p) => p.isSpeaker).toList();
+
+  List<VoiceParticipantModel> get listeners =>
+      participants.where((p) => !p.isSpeaker).toList();
+
+  factory VoiceRoomStateModel.fromJson(Map<String, dynamic> json) {
+    final rawParticipants = json['participants'];
+    final rawRaisedHands = json['raised_hand_user_ids'];
+    final parsedParticipants = rawParticipants is List
+        ? rawParticipants
+            .whereType<Map<String, dynamic>>()
+            .map(VoiceParticipantModel.fromJson)
+            .toList()
+        : const <VoiceParticipantModel>[];
+
+    return VoiceRoomStateModel(
+      channelId: json['channel_id']?.toString() ?? '',
+      fandomId: json['fandom_id']?.toString() ?? '',
+      channelName: json['channel_name']?.toString() ?? '',
+      voiceRoomType: json['voice_room_type']?.toString() ?? 'OPEN_MIC',
+      maxMembers: json['max_members'] is int ? json['max_members'] as int : 0,
+      activeCount: json['active_count'] is int
+          ? json['active_count'] as int
+          : parsedParticipants.length,
+      participants: parsedParticipants,
+      raisedHandUserIds: rawRaisedHands is List
+          ? rawRaisedHands.map((e) => e.toString()).toList()
+          : const [],
+    );
+  }
+}
+

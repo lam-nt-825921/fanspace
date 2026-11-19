@@ -314,3 +314,78 @@ class MessageListResponse(BaseModel):
     messages: list[MessageOut]
     has_more: bool
     next_cursor: uuid.UUID | None = None
+
+
+VoiceParticipantRole = Literal["SPEAKER", "LISTENER"]
+
+
+class VoiceParticipantOut(BaseModel):
+    """Real-time state of a member connected to a voice room."""
+
+    user_id: uuid.UUID
+    username: str
+    display_name: str
+    avatar_url: str | None = None
+    role: VoiceParticipantRole = "LISTENER"
+    is_muted: bool = True
+    is_hand_raised: bool = False
+    is_owner: bool = False
+    joined_at: datetime
+
+
+class VoiceRoomStateOut(BaseModel):
+    """Snapshot of a voice channel room's speakers, listeners, and raise-hand queue."""
+
+    channel_id: uuid.UUID
+    fandom_id: uuid.UUID
+    channel_name: str
+    voice_room_type: str = "OPEN_MIC"
+    max_members: int = 0
+    active_count: int = 0
+    participants: list[VoiceParticipantOut] = Field(default_factory=list)
+    raised_hand_user_ids: list[str] = Field(default_factory=list)
+
+
+class VoiceTokenOut(BaseModel):
+    """Dynamic Agora RTC Token bundle and room snapshot returned upon joining a voice channel."""
+
+    app_id: str
+    channel_name: str
+    rtc_token: str
+    uid: int
+    role: VoiceParticipantRole
+    can_publish: bool
+    expires_in: int
+    room_state: VoiceRoomStateOut
+
+
+class VoiceRaiseHandRequest(BaseModel):
+    """Payload for toggling raise-hand status in a Stage Room voice channel."""
+
+    raised: bool = Field(
+        default=True,
+        description="True để giơ tay xin phát biểu, False để hạ tay",
+    )
+
+
+class VoiceSpeakerManageRequest(BaseModel):
+    """Payload for a moderator/owner to promote, demote, or mute a participant in a voice room."""
+
+    role: VoiceParticipantRole | None = Field(
+        default=None,
+        description="Cập nhật vai trò trong phòng thoại: SPEAKER hoặc LISTENER",
+    )
+    is_muted: bool | None = Field(
+        default=None,
+        description="Trạng thái tắt mic bắt buộc (True = Tắt mic, False = Cho phép mở mic)",
+    )
+
+
+class VoiceSelfMuteRequest(BaseModel):
+    """Payload for a voice participant to toggle their own microphone state."""
+
+    is_muted: bool = Field(
+        ...,
+        description="True để tắt mic cá nhân, False để bật mic phát biểu",
+    )
+

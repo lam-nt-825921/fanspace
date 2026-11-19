@@ -19,8 +19,14 @@ from app.modules.chat.schemas import (
     MessageOut,
     MessageReactionRequest,
     MessageUpdate,
+    VoiceRaiseHandRequest,
+    VoiceRoomStateOut,
+    VoiceSelfMuteRequest,
+    VoiceSpeakerManageRequest,
+    VoiceTokenOut,
 )
 from app.modules.chat.service import ChannelService, MessageService
+from app.modules.chat.voice_service import VoiceChannelService
 from app.modules.identity.models import User
 from app.modules.identity.service import get_current_user
 
@@ -298,3 +304,178 @@ async def toggle_pin_channel_message(
         current_user=current_user,
         perm_checker=perm_checker,
     )
+
+
+# ---------------------------------------------------------------------------
+# FR-11 (UC-06): Real-time Voice Channel via Agora RTC
+# ---------------------------------------------------------------------------
+
+
+@messages_router.post(
+    "/{channel_id}/voice/token",
+    response_model=VoiceTokenOut,
+    summary="Cấp Dynamic Agora RTC Token và tham gia phòng thoại",
+    description="Kiểm tra quyền `VOICE_CONNECT` và giới hạn `max_members`, ghi nhận người dùng vào phòng thoại trên Redis và trả về Dynamic Agora RTC Token.",
+)
+async def issue_voice_channel_token(
+    channel_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceTokenOut:
+    """Issues a dynamic Agora RTC token and joins the caller to the voice room."""
+    return await VoiceChannelService.issue_voice_token_and_join(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.get(
+    "/{channel_id}/voice/state",
+    response_model=VoiceRoomStateOut,
+    summary="Xem trạng thái phòng thoại thời gian thực",
+    description="Trả về danh sách người phát biểu (Speakers), thính giả (Listeners) và danh sách giơ tay xin nói.",
+)
+async def get_voice_channel_state(
+    channel_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceRoomStateOut:
+    """Retrieves the real-time state of a voice channel room."""
+    return await VoiceChannelService.get_voice_room_state(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.post(
+    "/{channel_id}/voice/raise-hand",
+    response_model=VoiceRoomStateOut,
+    summary="Giơ tay hoặc hạ tay xin phát biểu trong phòng Stage Room",
+    description="Cho phép Thính giả trong kênh thoại `STAGE_ROOM` giơ tay xin lên sân khấu phát biểu.",
+)
+async def toggle_voice_raise_hand(
+    channel_id: uuid.UUID,
+    data: VoiceRaiseHandRequest = VoiceRaiseHandRequest(),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceRoomStateOut:
+    """Toggles the raise-hand flag for a participant in a Stage Room."""
+    return await VoiceChannelService.toggle_raise_hand(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        data=data,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.put(
+    "/{channel_id}/voice/speakers/{user_id}",
+    response_model=VoiceRoomStateOut,
+    summary="Điều phối người phát biểu hoặc tắt mic thành viên (Owner/Mod)",
+    description="Cho phép Chủ Fandom hoặc Điều hành viên mời thính giả lên làm Speaker, đưa xuống Listener hoặc tắt mic.",
+)
+async def manage_voice_channel_speaker(
+    channel_id: uuid.UUID,
+    user_id: uuid.UUID,
+    data: VoiceSpeakerManageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceRoomStateOut:
+    """Promotes, demotes, or mutes a participant in a voice channel."""
+    return await VoiceChannelService.manage_speaker(
+        db=db,
+        channel_id=channel_id,
+        target_user_id=user_id,
+        current_user=current_user,
+        data=data,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.put(
+    "/{channel_id}/voice/me/mute",
+    response_model=VoiceRoomStateOut,
+    summary="Bật hoặc tắt mic cá nhân trong phòng thoại",
+    description="Cho phép người dùng có vai trò `SPEAKER` tự bật/tắt mic của chính mình.",
+)
+async def toggle_voice_self_mute(
+    channel_id: uuid.UUID,
+    data: VoiceSelfMuteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceRoomStateOut:
+    """Toggles the caller's own microphone state in a voice channel."""
+    return await VoiceChannelService.toggle_self_mute(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        data=data,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.post(
+    "/{channel_id}/voice/mute-all",
+    response_model=VoiceRoomStateOut,
+    summary="Ngắt mic toàn bộ thành viên trong phòng thoại (Owner/Mod)",
+    description="Tắt mic tất cả người tham gia khác trong phòng thoại (yêu cầu quyền `MODERATE_CHAT` hoặc `MANAGE_CHANNELS`).",
+)
+async def mute_all_voice_channel(
+    channel_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceRoomStateOut:
+    """Mutes all non-caller participants in the voice room."""
+    return await VoiceChannelService.mute_all_participants(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
+
+@messages_router.post(
+    "/{channel_id}/voice/leave",
+    response_model=VoiceRoomStateOut,
+    summary="Rời khỏi phòng thoại",
+    description="Gỡ người dùng khỏi danh sách đang kết nối trong phòng thoại và giải phóng slot `max_members`.",
+)
+async def leave_voice_channel_room(
+    channel_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    perm_checker: IPermissionChecker = Depends(get_permission_checker),
+    redis: aioredis.Redis = Depends(get_redis),
+) -> VoiceRoomStateOut:
+    """Disconnects the caller from a voice channel room."""
+    return await VoiceChannelService.leave_voice_room(
+        db=db,
+        channel_id=channel_id,
+        current_user=current_user,
+        perm_checker=perm_checker,
+        redis=redis,
+    )
+
