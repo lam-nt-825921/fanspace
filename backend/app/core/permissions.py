@@ -396,11 +396,35 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
             )
             channel = channel_res.scalar_one_or_none()
             if channel:
-                if channel.required_role_id is not None and Permission.MANAGE_CHANNELS not in permissions:
-                    has_role = any(r.id == channel.required_role_id for r in roles)
-                    if not has_role:
+                # 1. Resolve allowed regular roles (multi-role support + backward compatible required_role_id)
+                raw_allowed = getattr(channel, "allowed_role_ids", None)
+                allowed_role_uuids: set[uuid.UUID] = set()
+                if isinstance(raw_allowed, list):
+                    for item in raw_allowed:
+                        try:
+                            allowed_role_uuids.add(
+                                item if isinstance(item, uuid.UUID) else uuid.UUID(str(item))
+                            )
+                        except (ValueError, TypeError):
+                            continue
+                if not allowed_role_uuids and channel.required_role_id is not None:
+                    allowed_role_uuids.add(channel.required_role_id)
+
+                if allowed_role_uuids and Permission.MANAGE_CHANNELS not in permissions:
+                    matched_roles = [r for r in roles if r.id in allowed_role_uuids]
+                    if not matched_roles:
                         return set()
 
+                    role_mask = int(
+                        getattr(channel, "role_permissions_bitmask", 32831)
+                        if getattr(channel, "role_permissions_bitmask", None) is not None
+                        else 32831
+                    )
+                    self._apply_channel_permission_mask(
+                        permissions, role_mask, is_currently_muted
+                    )
+
+                # 2. Resolve Membership VIP restrictions & granular membership_permissions_bitmask
                 membership_roles = [r for r in roles if r.is_membership_tier]
                 min_req_tier = int(getattr(channel, "min_membership_tier_level", 0) or 0)
 
@@ -412,17 +436,40 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
                         if highest_tier < min_req_tier:
                             return set()
 
-                if getattr(channel, "membership_bypass_slowmode", False) and membership_roles:
-                    for mr in membership_roles:
-                        mr_level = int(mr.tier_level or 1)
+                qualified_membership_roles = [
+                    mr
+                    for mr in membership_roles
+                    if int(mr.tier_level or 1) >= min_req_tier
+                ]
+                if qualified_membership_roles and Permission.MANAGE_CHANNELS not in permissions:
+                    mem_mask = int(
+                        getattr(channel, "membership_permissions_bitmask", 32831)
+                        if getattr(channel, "membership_permissions_bitmask", None) is not None
+                        else 32831
+                    )
+                    if channel.is_membership_only:
+                        self._apply_channel_permission_mask(
+                            permissions, mem_mask, is_currently_muted
+                        )
+                    elif mem_mask & PermissionBit.BYPASS_SLOWMODE:
+                        for mr in qualified_membership_roles:
+                            mr_perks = int(
+                                mr.membership_perks_bitmask
+                                if mr.membership_perks_bitmask is not None
+                                else MembershipPerkBit.DEFAULT_TIER_PERKS
+                            )
+                            if mr_perks & MembershipPerkBit.PRIORITY_CHANNEL_ACCESS:
+                                permissions.add(Permission.BYPASS_SLOWMODE)
+                                break
+
+                if getattr(channel, "membership_bypass_slowmode", False) and qualified_membership_roles:
+                    for mr in qualified_membership_roles:
                         mr_perks = int(
                             mr.membership_perks_bitmask
                             if mr.membership_perks_bitmask is not None
                             else MembershipPerkBit.DEFAULT_TIER_PERKS
                         )
-                        if mr_level >= min_req_tier and (
-                            mr_perks & MembershipPerkBit.PRIORITY_CHANNEL_ACCESS
-                        ):
+                        if mr_perks & MembershipPerkBit.PRIORITY_CHANNEL_ACCESS:
                             permissions.add(Permission.BYPASS_SLOWMODE)
                             break
 
@@ -436,6 +483,45 @@ class DefaultMembershipPermissionAdapter(BasePermissionChecker):
                         permissions.discard(Permission.VOICE_SPEAK)
 
         return permissions
+
+    @staticmethod
+    def _apply_channel_permission_mask(
+        permissions: set[Permission],
+        mask: int,
+        is_currently_muted: bool,
+    ) -> None:
+        """Applies a channel-level `PermissionBit` mask to the caller's effective permission set."""
+        from app.modules.rbac.models import PermissionBit
+
+        if not (mask & PermissionBit.READ_MESSAGES):
+            permissions.discard(Permission.READ_MESSAGES)
+        if not (mask & PermissionBit.SEND_MESSAGES):
+            permissions.discard(Permission.SEND_MESSAGES)
+        elif not is_currently_muted:
+            permissions.add(Permission.SEND_MESSAGES)
+
+        if not (mask & PermissionBit.ATTACH_FILES):
+            permissions.discard(Permission.ATTACH_FILES)
+        elif not is_currently_muted:
+            permissions.add(Permission.ATTACH_FILES)
+
+        if not (mask & PermissionBit.EMBED_LINKS):
+            permissions.discard(Permission.EMBED_LINKS)
+        elif not is_currently_muted:
+            permissions.add(Permission.EMBED_LINKS)
+
+        if not (mask & PermissionBit.VOICE_CONNECT):
+            permissions.discard(Permission.VOICE_CONNECT)
+        else:
+            permissions.add(Permission.VOICE_CONNECT)
+
+        if not (mask & PermissionBit.VOICE_SPEAK):
+            permissions.discard(Permission.VOICE_SPEAK)
+        elif not is_currently_muted:
+            permissions.add(Permission.VOICE_SPEAK)
+
+        if mask & PermissionBit.BYPASS_SLOWMODE:
+            permissions.add(Permission.BYPASS_SLOWMODE)
 
 
 async def get_permission_checker(

@@ -154,6 +154,18 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS membership_bypass_slowmode BOOLEAN DEFAULT FALSE NOT NULL;")
         )
+        await conn.execute(
+            text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS allowed_role_ids JSONB NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS max_members INTEGER DEFAULT 0 NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS role_permissions_bitmask INTEGER DEFAULT 32831 NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS membership_permissions_bitmask INTEGER DEFAULT 32831 NOT NULL;")
+        )
 
 
 

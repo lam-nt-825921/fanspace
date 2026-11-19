@@ -163,11 +163,34 @@ class ChannelService:
         return defaults
 
     @staticmethod
+    def _extract_allowed_role_ids(channel: Channel) -> list[uuid.UUID]:
+        """Normalizes `allowed_role_ids` and `required_role_id` into a deduplicated list of UUIDs."""
+        raw_list = getattr(channel, "allowed_role_ids", None)
+        parsed: list[uuid.UUID] = []
+        if isinstance(raw_list, list):
+            for item in raw_list:
+                try:
+                    uid = item if isinstance(item, uuid.UUID) else uuid.UUID(str(item))
+                    if uid not in parsed:
+                        parsed.append(uid)
+                except (ValueError, TypeError):
+                    continue
+        if not parsed and channel.required_role_id is not None:
+            parsed.append(channel.required_role_id)
+        return parsed
+
+    @staticmethod
     def _serialize_channel_out(
         channel: Channel,
         effective_perms: frozenset[Permission],
     ) -> ChannelOut:
         """Maps a `Channel` ORM entity and effective permissions to `ChannelOut`."""
+        allowed_roles = ChannelService._extract_allowed_role_ids(channel)
+        primary_role = (
+            allowed_roles[0]
+            if allowed_roles
+            else channel.required_role_id
+        )
         return ChannelOut(
             id=channel.id,
             fandom_id=channel.fandom_id,
@@ -183,7 +206,19 @@ class ChannelService:
             membership_bypass_slowmode=bool(
                 getattr(channel, "membership_bypass_slowmode", False)
             ),
-            required_role_id=channel.required_role_id,
+            required_role_id=primary_role,
+            allowed_role_ids=allowed_roles,
+            max_members=int(getattr(channel, "max_members", 0) or 0),
+            role_permissions_bitmask=int(
+                getattr(channel, "role_permissions_bitmask", 32831)
+                if getattr(channel, "role_permissions_bitmask", None) is not None
+                else 32831
+            ),
+            membership_permissions_bitmask=int(
+                getattr(channel, "membership_permissions_bitmask", 32831)
+                if getattr(channel, "membership_permissions_bitmask", None) is not None
+                else 32831
+            ),
             slow_mode_seconds=channel.slow_mode_seconds,
             voice_room_type=channel.voice_room_type,
             created_at=channel.created_at,
@@ -289,6 +324,20 @@ class ChannelService:
         elif data.type == "TEXT":
             voice_type = None
 
+        normalized_role_ids: list[uuid.UUID] = []
+        if data.allowed_role_ids is not None:
+            for rid in data.allowed_role_ids:
+                if rid not in normalized_role_ids:
+                    normalized_role_ids.append(rid)
+        elif data.required_role_id is not None:
+            normalized_role_ids.append(data.required_role_id)
+
+        primary_role_id = (
+            normalized_role_ids[0]
+            if normalized_role_ids
+            else data.required_role_id
+        )
+
         channel = Channel(
             fandom_id=fandom.id,
             name=data.name,
@@ -307,7 +356,19 @@ class ChannelService:
                 if data.type == "TEXT"
                 else False
             ),
-            required_role_id=data.required_role_id,
+            required_role_id=primary_role_id,
+            allowed_role_ids=[str(rid) for rid in normalized_role_ids],
+            max_members=int(data.max_members or 0),
+            role_permissions_bitmask=int(
+                data.role_permissions_bitmask
+                if data.role_permissions_bitmask is not None
+                else 32831
+            ),
+            membership_permissions_bitmask=int(
+                data.membership_permissions_bitmask
+                if data.membership_permissions_bitmask is not None
+                else 32831
+            ),
             slow_mode_seconds=data.slow_mode_seconds if data.type == "TEXT" else 0,
             voice_room_type=voice_type,
         )
@@ -406,8 +467,35 @@ class ChannelService:
         if data.membership_bypass_slowmode is not None and channel.type == "TEXT":
             channel.membership_bypass_slowmode = data.membership_bypass_slowmode
 
-        if "required_role_id" in data.model_fields_set:
+        if "allowed_role_ids" in data.model_fields_set:
+            if data.allowed_role_ids is not None:
+                deduped: list[uuid.UUID] = []
+                for rid in data.allowed_role_ids:
+                    if rid not in deduped:
+                        deduped.append(rid)
+                channel.allowed_role_ids = [str(rid) for rid in deduped]
+                channel.required_role_id = deduped[0] if deduped else None
+            else:
+                channel.allowed_role_ids = []
+                channel.required_role_id = None
+        elif "required_role_id" in data.model_fields_set:
             channel.required_role_id = data.required_role_id
+            channel.allowed_role_ids = (
+                [str(data.required_role_id)]
+                if data.required_role_id is not None
+                else []
+            )
+
+        if data.max_members is not None:
+            channel.max_members = int(data.max_members)
+
+        if data.role_permissions_bitmask is not None:
+            channel.role_permissions_bitmask = int(data.role_permissions_bitmask)
+
+        if data.membership_permissions_bitmask is not None:
+            channel.membership_permissions_bitmask = int(
+                data.membership_permissions_bitmask
+            )
 
         if data.slow_mode_seconds is not None and channel.type == "TEXT":
             channel.slow_mode_seconds = data.slow_mode_seconds
@@ -839,6 +927,25 @@ class MessageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Chỉ Chủ Fandom hoặc Ban quản trị mới có quyền đăng thông báo trong kênh này.",
             )
+
+        # Enforce max_members concurrent participation limit unless caller holds MANAGE_CHANNELS
+        max_members_limit = int(getattr(channel, "max_members", 0) or 0)
+        if (
+            max_members_limit > 0
+            and not eval_ctx.has(Permission.MANAGE_CHANNELS)
+            and redis is not None
+        ):
+            active_key = f"channel:active_members:{channel.id}"
+            member_token = str(current_user.id)
+            is_active = await redis.sismember(active_key, member_token)
+            current_active = int(await redis.scard(active_key) or 0)
+            if not is_active and current_active >= max_members_limit:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Kênh đã đạt giới hạn tối đa {max_members_limit} người tham gia đồng thời.",
+                )
+            await redis.sadd(active_key, member_token)
+            await redis.expire(active_key, 3600)
 
         # Enforce Redis Slow-mode cooldown unless caller holds BYPASS_SLOWMODE
         slow_key = f"slowmode:channel:{channel.id}:user:{current_user.id}"

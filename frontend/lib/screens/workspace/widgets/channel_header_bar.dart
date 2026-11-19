@@ -113,6 +113,66 @@ class ChannelHeaderBar extends StatelessWidget {
                           ),
                         ),
                       ),
+                    if (channel.maxMembers > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.people_alt_outlined,
+                              size: 12,
+                              color: AppTheme.primary,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Tối đa ${channel.maxMembers} người',
+                              style: const TextStyle(
+                                color: AppTheme.primary,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (channel.allowedRoleIds.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.success.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.shield_outlined,
+                              size: 12,
+                              color: AppTheme.success,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${channel.allowedRoleIds.length} Vai trò',
+                              style: const TextStyle(
+                                color: AppTheme.success,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
                 if (channel.topic != null && channel.topic!.isNotEmpty)

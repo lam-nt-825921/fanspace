@@ -491,20 +491,52 @@ class WorkspaceSidebar extends StatelessWidget {
       iconData = Icons.tag;
     }
 
-    Widget? trailing;
+    final trailingBadges = <Widget>[];
     if (channel.isMembershipOnly) {
-      trailing = const Icon(
-        Icons.workspace_premium_rounded,
-        size: 14,
-        color: Colors.amber,
-      );
-    } else if (channel.slowModeSeconds > 0) {
-      trailing = Icon(
-        Icons.timer_outlined,
-        size: 14,
-        color: palette.textMuted,
+      trailingBadges.add(
+        const Icon(
+          Icons.workspace_premium_rounded,
+          size: 14,
+          color: Colors.amber,
+        ),
       );
     }
+    if (channel.slowModeSeconds > 0) {
+      trailingBadges.add(
+        Icon(
+          Icons.timer_outlined,
+          size: 14,
+          color: palette.textMuted,
+        ),
+      );
+    }
+    if (channel.maxMembers > 0) {
+      trailingBadges.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: AppTheme.primary.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            '≤${channel.maxMembers}',
+            style: const TextStyle(
+              color: AppTheme.primary,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final Widget? trailing = trailingBadges.isEmpty
+        ? null
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 4,
+            children: trailingBadges,
+          );
 
     return _buildNavTile(
       context: context,
