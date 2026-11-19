@@ -24,9 +24,9 @@ COPY . .
 # Expose FastAPI and Socket.IO server port
 EXPOSE 8000
 
-# Healthcheck checking the /health endpoint
+# Healthcheck checking the /health endpoint on dynamic $PORT or 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD sh -c 'curl -f http://localhost:${PORT:-8000}/health || exit 1'
 
-# Start Uvicorn ASGI server with Socket.IO
-CMD ["uvicorn", "app.main:socket_app", "--host", "0.0.0.0", "--port", "8000"]
+# Start Uvicorn ASGI server with Socket.IO (supports Heroku dynamic $PORT)
+CMD ["sh", "-c", "uvicorn app.main:socket_app --host 0.0.0.0 --port ${PORT:-8000}"]

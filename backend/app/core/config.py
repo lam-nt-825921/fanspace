@@ -6,6 +6,7 @@ Redis cache, Google OAuth2, and SMTP email delivery.
 """
 
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,6 +64,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://fanspace:fanspace_password@localhost:5433/fanspace_db"
     DATABASE_POOL_SIZE: int = 15
     DATABASE_MAX_OVERFLOW: int = 5
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        """Normalizes Heroku Postgres URLs (`postgres://` or `postgresql://`) to `postgresql+asyncpg://`."""
+        if not isinstance(v, str):
+            return v
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     REDIS_URL: str = "redis://localhost:6379/0"
 

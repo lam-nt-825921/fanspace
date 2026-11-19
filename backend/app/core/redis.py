@@ -16,13 +16,20 @@ _redis_client: aioredis.Redis | None = None
 def get_redis_client() -> aioredis.Redis:
     """Retrieves or initializes the global asynchronous Redis client.
 
+    Automatically handles Heroku Key-Value Store `rediss://` TLS connections
+    with self-signed certificates.
+
     Returns:
         aioredis.Redis: Active Redis client instance connected to `settings.REDIS_URL`.
     """
     global _redis_client
     if _redis_client is None:
+        redis_url = settings.REDIS_URL
+        if redis_url.startswith("rediss://") and "ssl_cert_reqs" not in redis_url:
+            separator = "&" if "?" in redis_url else "?"
+            redis_url = f"{redis_url}{separator}ssl_cert_reqs=none"
         _redis_client = aioredis.from_url(
-            settings.REDIS_URL,
+            redis_url,
             decode_responses=True,
             max_connections=50,
         )
