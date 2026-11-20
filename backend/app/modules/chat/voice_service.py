@@ -94,8 +94,9 @@ class AgoraTokenBuilder:
         Returns:
             str: Base64-encoded Agora `006` Dynamic RTC Token string.
         """
-        clean_app_id = (app_id or "970ca35de60c44645bbae8a215061b33").strip()
-        clean_cert = (app_certificate or "5cfd2fd1755d40ecb72977518be15d3b").strip()
+        cfg = get_settings()
+        clean_app_id = (app_id or cfg.AGORA_APP_ID).strip()
+        clean_cert = (app_certificate or cfg.AGORA_APP_CERTIFICATE).strip()
         now_ts = int(time.time())
         expire_ts = now_ts + max(60, expire_seconds)
         salt = secrets.randbelow(99999999) + 1

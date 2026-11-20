@@ -98,8 +98,8 @@ class Settings(BaseSettings):
     LIVEKIT_API_SECRET: str = ""
 
     # Agora.io RTC Cloud Voice Configuration (FR-11 / UC-06)
-    AGORA_APP_ID: str = "970ca35de60c44645bbae8a215061b33"
-    AGORA_APP_CERTIFICATE: str = "5cfd2fd1755d40ecb72977518be15d3b"
+    AGORA_APP_ID: str = "7c34d24553334cf8bdf31c01312df4b8"
+    AGORA_APP_CERTIFICATE: str = "5f6bafea1acc421090235c4381b09924"
     AGORA_TOKEN_TTL_SECONDS: int = 3600
 
     # Google OAuth2 & Frontend Callback Origin
