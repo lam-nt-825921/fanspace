@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.modules.billing.models import FandomBankAccount, PaymentOrder, PaymentTransaction
+from app.modules.billing.sepay_connector import get_sepay_account_connector
 from app.modules.billing.reconciliation import (
     MAX_MEMBERSHIP_TIERS_PER_FANDOM,
     build_fandom_leaderboard_response,
@@ -232,6 +233,22 @@ class BillingService:
             acc.account_number = data.account_number.strip()
             acc.account_name = data.account_name.strip().upper()
             acc.is_active = data.is_active
+
+        # Isolated third-party account activation hook (Adapter Pattern)
+        # Allows replacing Sandbox token verification with OAuth2 without altering billing logic
+        connector = get_sepay_account_connector()
+        activation = await connector.activate_bank_account(
+            bank_code=acc.bank_code,
+            account_number=acc.account_number,
+            account_name=acc.account_name,
+            fandom_id=fandom.id,
+        )
+
+        acc.sepay_account_id = activation.sepay_account_id
+        acc.activation_mode = activation.activation_mode
+        acc.is_verified = activation.is_verified
+        acc.verified_at = datetime.now(timezone.utc) if activation.is_verified else None
+        acc.activation_note = activation.activation_note
 
         await db.commit()
         await db.refresh(acc)

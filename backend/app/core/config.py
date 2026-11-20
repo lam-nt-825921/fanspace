@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     SEPAY_ORDER_TTL_MINUTES: int = 15
     SEPAY_GRACE_PERIOD_MINUTES: int = 5
     SEPAY_ALLOW_SANDBOX_SIMULATE: bool = True
+    SEPAY_SANDBOX_API_KEY: str = "S8VBIOJLZ237NGR3VAMYD5X51MPSDV2QXABYGUAZHX9ROPLTE7DKQ810Y90FHILP"
+    SEPAY_SANDBOX_BASE_URL: str = "https://userapi-sandbox.sepay.vn/v2"
+    SEPAY_ACCOUNT_ACTIVATION_MODE: str = "sandbox_token"
 
     LIVEKIT_URL: str = ""
     LIVEKIT_API_KEY: str = ""

@@ -176,6 +176,21 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS membership_permissions_bitmask INTEGER DEFAULT 32831 NOT NULL;")
         )
+        await conn.execute(
+            text("ALTER TABLE fandom_bank_accounts ADD COLUMN IF NOT EXISTS sepay_account_id VARCHAR(100) NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE fandom_bank_accounts ADD COLUMN IF NOT EXISTS activation_mode VARCHAR(50) DEFAULT 'sandbox_token' NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE fandom_bank_accounts ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE NOT NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE fandom_bank_accounts ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP WITH TIME ZONE NULL;")
+        )
+        await conn.execute(
+            text("ALTER TABLE fandom_bank_accounts ADD COLUMN IF NOT EXISTS activation_note TEXT NULL;")
+        )
 
 
 

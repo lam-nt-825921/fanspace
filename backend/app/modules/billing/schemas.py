@@ -38,6 +38,11 @@ class FandomBankAccountOut(BaseModel):
     account_number: str
     account_name: str
     is_active: bool
+    sepay_account_id: str | None = None
+    activation_mode: str = "sandbox_token"
+    is_verified: bool = False
+    verified_at: datetime | None = None
+    activation_note: str | None = None
     updated_at: datetime
 
     model_config = {"from_attributes": True}
