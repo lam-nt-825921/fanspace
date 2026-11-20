@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/voice/agora_voice_client.dart';
 import '../../../models/channel_model.dart';
 import '../../../providers/auth_provider.dart';
 
@@ -40,6 +41,11 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
   int? _agoraUid;
   String? _errorMessage;
   Timer? _pollTimer;
+  bool _isDeafened = false;
+  final Map<int, double> _userVolumes = {};
+  final Set<int> _localMutedUsers = {};
+  String? _previousRole;
+  bool? _previousServerMute;
 
   @override
   void initState() {
@@ -64,6 +70,7 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
       _rtcToken = null;
       _agoraUid = null;
       _errorMessage = null;
+      AgoraVoiceClient.instance.leaveVoiceRoom();
       _fetchRoomState();
     }
   }
@@ -71,6 +78,7 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    AgoraVoiceClient.instance.leaveVoiceRoom();
     super.dispose();
   }
 
@@ -90,10 +98,26 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
       );
       if (!mounted) return;
       if (res.data is Map<String, dynamic>) {
+        final nextState = VoiceRoomStateModel.fromJson(
+          res.data as Map<String, dynamic>,
+        );
+        final currentUserId = _resolveCurrentUserId(context);
+        final myP = nextState.participants
+            .where((p) => p.userId == currentUserId)
+            .firstOrNull;
+        if (myP != null && _isConnected) {
+          if (_previousRole != null && _previousRole != myP.role) {
+            AgoraVoiceClient.instance.enforceRole(myP.role);
+          }
+          if (myP.isMuted && _previousServerMute == false) {
+            AgoraVoiceClient.instance.setLocalMute(true);
+          }
+          _previousRole = myP.role;
+          _previousServerMute = myP.isMuted;
+        }
+
         setState(() {
-          _roomState = VoiceRoomStateModel.fromJson(
-            res.data as Map<String, dynamic>,
-          );
+          _roomState = nextState;
         });
       }
     } catch (_) {}
@@ -113,14 +137,32 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
       if (!mounted) return;
       final data = res.data as Map<String, dynamic>;
       final stateJson = data['room_state'];
+      final appId = data['app_id']?.toString() ?? '';
+      final channelName = data['channel_name']?.toString() ?? '';
+      final rtcToken = data['rtc_token']?.toString() ?? '';
+      final agoraUid = data['uid'] is int ? data['uid'] as int : null;
+      final role = data['role']?.toString() ?? 'LISTENER';
+
+      if (agoraUid != null && rtcToken.isNotEmpty) {
+        await AgoraVoiceClient.instance.joinVoiceRoom(
+          appId: appId,
+          channelName: channelName,
+          token: rtcToken,
+          uid: agoraUid,
+          role: role,
+        );
+      }
+
       setState(() {
-        _rtcToken = data['rtc_token']?.toString();
-        _agoraUid = data['uid'] is int ? data['uid'] as int : null;
+        _rtcToken = rtcToken;
+        _agoraUid = agoraUid;
         if (stateJson is Map<String, dynamic>) {
           _roomState = VoiceRoomStateModel.fromJson(stateJson);
         }
         _isConnected = true;
         _isLoading = false;
+        _previousRole = role;
+        _previousServerMute = role != 'SPEAKER';
       });
     } on DioException catch (e) {
       if (!mounted) return;
@@ -145,6 +187,7 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
     setState(() => _isLoading = true);
 
     try {
+      await AgoraVoiceClient.instance.leaveVoiceRoom();
       final res = await _api.dio.post(
         '/api/v1/channels/${widget.channel.id}/voice/leave',
       );
@@ -171,6 +214,7 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
 
   Future<void> _handleToggleSelfMute(bool nextMuted) async {
     try {
+      await AgoraVoiceClient.instance.setLocalMute(nextMuted);
       final res = await _api.dio.put(
         '/api/v1/channels/${widget.channel.id}/voice/me/mute',
         data: {'is_muted': nextMuted},
@@ -290,6 +334,272 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
         ),
       );
     }
+  }
+
+  Future<void> _handleToggleDeafen() async {
+    final nextDeafen = !_isDeafened;
+    await AgoraVoiceClient.instance.setDeafen(nextDeafen);
+    if (!mounted) return;
+    setState(() {
+      _isDeafened = nextDeafen;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          nextDeafen
+              ? 'Đã tắt âm thanh toàn phòng (Deafen).'
+              : 'Đã bật lại âm thanh phòng.',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _showUserAudioDialog(
+    VoiceParticipantModel participant, {
+    required bool isMe,
+    required bool canModerate,
+    required bool isStage,
+  }) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        double currentVol = _userVolumes[participant.agoraUid] ??
+            AgoraVoiceClient.instance.getUserVolume(participant.agoraUid);
+        bool isLocallyMuted = _localMutedUsers.contains(participant.agoraUid) ||
+            AgoraVoiceClient.instance.isUserLocallyMuted(participant.agoraUid);
+
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: context.palette.surface,
+              title: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 16,
+                    backgroundColor: AppTheme.primary.withValues(alpha: 0.16),
+                    backgroundImage: participant.avatarUrl != null
+                        ? NetworkImage(participant.avatarUrl!)
+                        : null,
+                    child: participant.avatarUrl == null
+                        ? Text(
+                            (participant.displayName.isNotEmpty
+                                    ? participant.displayName
+                                    : '?')
+                                .characters
+                                .first
+                                .toUpperCase(),
+                            style: const TextStyle(
+                              color: AppTheme.primary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          participant.displayName,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          participant.isOwner
+                              ? 'Chủ Fandom'
+                              : (participant.isSpeaker ? 'Diễn giả' : 'Thính giả'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: participant.isSpeaker
+                                ? AppTheme.success
+                                : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!isMe) ...[
+                      // 1. Personal Volume Slider
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Âm lượng đối với bạn:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            '${currentVol.toInt()}%',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: currentVol > 100
+                                  ? Colors.amber
+                                  : AppTheme.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        key: Key('slider_voice_volume_${participant.userId}'),
+                        value: currentVol,
+                        min: 0.0,
+                        max: 200.0,
+                        divisions: 40,
+                        label: '${currentVol.toInt()}%',
+                        activeColor: currentVol > 100
+                            ? Colors.amber
+                            : AppTheme.primary,
+                        onChanged: (val) {
+                          setDialogState(() => currentVol = val);
+                          setState(() {
+                            _userVolumes[participant.agoraUid] = val;
+                          });
+                          AgoraVoiceClient.instance.setUserVolume(
+                            participant.agoraUid,
+                            val,
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+
+                      // 2. Local 1-way Mute
+                      SwitchListTile(
+                        key: Key('switch_voice_local_mute_${participant.userId}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text(
+                          'Tắt âm người này với tôi',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        subtitle: const Text(
+                          'Chỉ bạn không nghe thấy, cả phòng vẫn nghe',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                        value: isLocallyMuted,
+                        activeThumbColor: Colors.white,
+                        activeTrackColor: AppTheme.error,
+                        onChanged: (val) {
+                          setDialogState(() => isLocallyMuted = val);
+                          setState(() {
+                            if (val) {
+                              _localMutedUsers.add(participant.agoraUid);
+                            } else {
+                              _localMutedUsers.remove(participant.agoraUid);
+                            }
+                          });
+                          AgoraVoiceClient.instance.setLocalUserMuted(
+                            participant.agoraUid,
+                            val,
+                          );
+                        },
+                      ),
+                      const Divider(height: 24),
+                    ],
+
+                    // 3. Server Moderation Controls (Host / Mod only)
+                    if (canModerate && !participant.isOwner && !isMe) ...[
+                      const Text(
+                        'Quản trị viên (Cả phòng thoại):',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: Colors.amber,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      if (participant.isSpeaker) ...[
+                        ElevatedButton.icon(
+                          key: Key('btn_voice_server_mute_${participant.userId}'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.warning,
+                            foregroundColor: Colors.black,
+                            minimumSize: const Size.fromHeight(38),
+                          ),
+                          icon: const Icon(Icons.mic_off, size: 16),
+                          label: const Text(
+                            'Tắt mic thành viên này (Server)',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            _handleManageSpeaker(participant.userId, isMuted: true);
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        if (isStage)
+                          ElevatedButton.icon(
+                            key: Key('btn_voice_demote_listener_${participant.userId}'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.error,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size.fromHeight(38),
+                            ),
+                            icon: const Icon(Icons.arrow_downward, size: 16),
+                            label: const Text(
+                              'Hạ xuống Khán giả (Tắt hẳn quyền nói)',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              _handleManageSpeaker(
+                                participant.userId,
+                                role: 'LISTENER',
+                                isMuted: true,
+                              );
+                            },
+                          ),
+                      ] else if (isStage) ...[
+                        ElevatedButton.icon(
+                          key: Key('btn_voice_promote_speaker_${participant.userId}'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.success,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size.fromHeight(38),
+                          ),
+                          icon: const Icon(Icons.arrow_upward, size: 16),
+                          label: const Text(
+                            'Mời lên làm Diễn giả (Cấp quyền nói)',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            _handleManageSpeaker(
+                              participant.userId,
+                              role: 'SPEAKER',
+                              isMuted: false,
+                            );
+                          },
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -528,6 +838,31 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
                                     : 'Đang mở Mic (Nhấn để tắt)',
                               ),
                             ),
+                          OutlinedButton.icon(
+                            key: const Key('btn_voice_toggle_deafen'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _isDeafened
+                                  ? AppTheme.error
+                                  : palette.textPrimary,
+                              side: BorderSide(
+                                color: _isDeafened
+                                    ? AppTheme.error
+                                    : palette.border,
+                              ),
+                            ),
+                            onPressed: _handleToggleDeafen,
+                            icon: Icon(
+                              _isDeafened
+                                  ? Icons.headset_off_outlined
+                                  : Icons.headset_outlined,
+                              size: 18,
+                            ),
+                            label: Text(
+                              _isDeafened
+                                  ? 'Bật loa phòng'
+                                  : 'Tắt loa phòng (Deafen)',
+                            ),
+                          ),
                           if (isStage &&
                               myParticipant != null &&
                               !myParticipant.isSpeaker)
@@ -791,6 +1126,11 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
     final palette = context.palette;
     final isSpeakingActive = participant.isSpeaker && !participant.isMuted;
 
+    final myUserId = _resolveCurrentUserId(context);
+    final isMe = participant.userId == myUserId;
+    final isLocallyMuted = _localMutedUsers.contains(participant.agoraUid) ||
+        AgoraVoiceClient.instance.isUserLocallyMuted(participant.agoraUid);
+
     return Container(
       width: 170,
       padding: const EdgeInsets.all(14),
@@ -873,14 +1213,43 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
               fontSize: 11,
             ),
           ),
-          if (canModerate && !participant.isOwner) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 2,
+            runSpacing: 2,
+            children: [
+              IconButton(
+                key: Key('btn_voice_audio_settings_${participant.userId}'),
+                tooltip: isMe
+                    ? 'Cài đặt âm lượng'
+                    : (isLocallyMuted
+                        ? 'Đang tắt âm người này với bạn (Bấm để mở)'
+                        : 'Cài đặt âm lượng & Tắt âm 1 phía'),
+                constraints: const BoxConstraints(
+                  minWidth: 28,
+                  minHeight: 28,
+                ),
+                padding: EdgeInsets.zero,
+                icon: Icon(
+                  isLocallyMuted
+                      ? Icons.volume_off_rounded
+                      : Icons.volume_up_outlined,
+                  size: 16,
+                  color: isLocallyMuted ? AppTheme.error : palette.textSecondary,
+                ),
+                onPressed: () => _showUserAudioDialog(
+                  participant,
+                  isMe: isMe,
+                  canModerate: canModerate,
+                  isStage: isStage,
+                ),
+              ),
+              if (canModerate && !participant.isOwner && !isMe) ...[
                 if (participant.isSpeaker && !participant.isMuted)
                   IconButton(
-                    tooltip: 'Tắt mic thành viên này',
+                    key: Key('btn_voice_quick_mute_${participant.userId}'),
+                    tooltip: 'Tắt mic thành viên này (Server)',
                     constraints: const BoxConstraints(
                       minWidth: 28,
                       minHeight: 28,
@@ -898,7 +1267,8 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
                   ),
                 if (isStage && participant.isSpeaker)
                   IconButton(
-                    tooltip: 'Đưa xuống làm Thính giả',
+                    key: Key('btn_voice_quick_demote_${participant.userId}'),
+                    tooltip: 'Hạ xuống làm Thính giả (Tước quyền nói)',
                     constraints: const BoxConstraints(
                       minWidth: 28,
                       minHeight: 28,
@@ -917,6 +1287,7 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
                   ),
                 if (isStage && !participant.isSpeaker)
                   IconButton(
+                    key: Key('btn_voice_quick_promote_${participant.userId}'),
                     tooltip: 'Mời lên làm Diễn giả',
                     constraints: const BoxConstraints(
                       minWidth: 28,
@@ -935,8 +1306,8 @@ class _VoiceChannelViewState extends State<VoiceChannelView> {
                     ),
                   ),
               ],
-            ),
-          ],
+            ],
+          ),
         ],
       ),
     );

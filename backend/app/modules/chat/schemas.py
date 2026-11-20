@@ -323,6 +323,7 @@ class VoiceParticipantOut(BaseModel):
     """Real-time state of a member connected to a voice room."""
 
     user_id: uuid.UUID
+    agora_uid: int | None = None
     username: str
     display_name: str
     avatar_url: str | None = None

@@ -202,9 +202,11 @@ class VoiceChannelService:
                 data = json.loads(text_val)
                 uid_str = str(data["user_id"])
                 is_raised = uid_str in raised_set or bool(data.get("is_hand_raised", False))
+                parsed_uid = uuid.UUID(uid_str)
                 participants.append(
                     VoiceParticipantOut(
-                        user_id=uuid.UUID(uid_str),
+                        user_id=parsed_uid,
+                        agora_uid=cls.uuid_to_agora_uid(parsed_uid),
                         username=data.get("username", ""),
                         display_name=data.get("display_name", ""),
                         avatar_url=data.get("avatar_url"),

@@ -298,6 +298,7 @@ class FandomChannelsDataModel {
 /// Real-time participant inside a voice channel room (FR-11 / UC-06).
 class VoiceParticipantModel {
   final String userId;
+  final int agoraUid;
   final String username;
   final String displayName;
   final String? avatarUrl;
@@ -309,6 +310,7 @@ class VoiceParticipantModel {
 
   const VoiceParticipantModel({
     required this.userId,
+    this.agoraUid = 0,
     required this.username,
     required this.displayName,
     this.avatarUrl,
@@ -321,9 +323,27 @@ class VoiceParticipantModel {
 
   bool get isSpeaker => role == 'SPEAKER';
 
+  static int computeAgoraUid(String uuidStr) {
+    try {
+      final clean = uuidStr.replaceAll('-', '');
+      final bigInt = BigInt.parse(clean, radix: 16);
+      final raw = (bigInt & BigInt.from(0x7FFFFFFF)).toInt();
+      return raw > 0 ? raw : 1;
+    } catch (_) {
+      return 1;
+    }
+  }
+
   factory VoiceParticipantModel.fromJson(Map<String, dynamic> json) {
+    final uidStr = json['user_id']?.toString() ?? '';
+    final rawAgoraUid = json['agora_uid'];
+    final computedUid = rawAgoraUid is int
+        ? rawAgoraUid
+        : computeAgoraUid(uidStr);
+
     return VoiceParticipantModel(
-      userId: json['user_id']?.toString() ?? '',
+      userId: uidStr,
+      agoraUid: computedUid,
       username: json['username']?.toString() ?? '',
       displayName:
           json['display_name']?.toString() ?? json['username']?.toString() ?? '',
